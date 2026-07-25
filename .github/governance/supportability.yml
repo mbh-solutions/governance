@@ -1,7 +1,7 @@
 standard:
   name: supportability-standard
   source: docs/reference/supportability-standard.md
-  hash: "a3808f788f1dcb8c004112bfe64bc92c718a676e4c97e5f81e67a2ef42e73ac9"
+  hash: "ec7a437a3b4e32240c862052d577298e9b5c388e46cd7d1f9fba4f1ef38db5e1"
 
 required_gates:
   lint:

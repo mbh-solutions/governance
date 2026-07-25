@@ -3,7 +3,7 @@ title: "Supportability Standard"
 owner: "Mark Heck"
 created_by: "Mark Heck"
 created: "2026-06-15"
-last_reviewed: "2026-06-15"
+last_reviewed: "2026-07-24"
 status: "active"
 ---
 
@@ -11,7 +11,7 @@ status: "active"
 
 | Document Owner | Created By | Created | Last Reviewed | Status |
 |---|---|---:|---:|---|
-| Mark Heck | Mark Heck | 2026-06-15 | 2026-06-15 | Active |
+| Mark Heck | Mark Heck | 2026-06-15 | 2026-07-24 | Active |
 
 ## Purpose
 
@@ -437,6 +437,81 @@ git diff whitespace check
 
 Use the repo’s actual commands when available.
 
+### SQLite supportability contract
+
+For a Python repository whose generated adoption configuration selects
+`python.sqlite.v1`, SQLite is a blocking supportability capability, not an
+advisory command. The evaluator owns `python.sqlite-supportability.v1`. A trusted
+operator opts in through the evaluator-owned generator's typed profile argument.
+The generated configuration, adoption
+manifest, and verifier enrollment must all bind `python.sqlite.v1`; source
+discovery does not auto-select it. Candidate configuration cannot provide SQL
+commands, exclusions, alternate adapters, profile changes, or escape hatches.
+Packaged `sqlite3` connection/cursor/sink evidence, or a packaged `.sql` resource
+referenced by that flow, under `python.standard.v1` is `BLOCK_TECHNICAL` until a
+trusted adoption generation selects `python.sqlite.v1`. Unclassified SQL-like
+sources also block; discovery never guesses an engine.
+
+The gate must:
+
+* scan the host-validated packaged Python and resource surface;
+* inspect tracked files, untracked nonignored files, and ignored SQL only when
+  production code references it during adoption preflight;
+* resolve only literals, constant concatenation, static dictionaries, and
+  statically selected dictionary values;
+* prove SQLite connection/cursor receiver provenance across packaged modules and
+  block unresolved aliases, wrappers, or dynamic dispatch;
+* enforce 10,000 files, 2 MiB per file, 32 MiB total source, 1,000,000 AST nodes,
+  10,000 sinks, 10,000 statements, and 1 MiB per normalized statement;
+* validate `execute`, `executemany`, and `executescript` with a memory-only
+  SQLite database without importing candidate code;
+* disable extension loading and use a default-deny authorizer, allowlisted
+  PRAGMAs/functions, fixed SQLite limits, and progress/time bounds exactly as
+  `sqlite-policy.v1` in ADR 0003 defines;
+* normalize `CRLF`, `CR`, and `LF` before canonical SQL hashing; and
+* bind paths, lines, hashes, sinks, receiver provenance, SQLite identity,
+  preparation results, errors, timestamps, limits, and bounded counts into typed
+  evidence.
+
+Tests, environments, caches, and arbitrary ignored directories are outside the
+packaged scan surface. An ignored SQL resource referenced by production code is
+inside adoption preflight and must exist in the committed pull-request head.
+
+F-strings, runtime-built SQL, missing constants, dynamic identifiers,
+runtime-loaded external SQL, unsupported sinks, malformed SQL, absent packaged
+resources, profile substitution, capability omission, evidence mutation,
+`ATTACH`, `DETACH`, `VACUUM`, file-backed databases, extension loading,
+writable-schema operations, non-allowlisted PRAGMAs/functions, and contradictory
+evidence fail closed.
+
+`sqlite-policy.v1` permits candidate PRAGMAs only `foreign_keys`,
+`foreign_key_check`, and `quick_check`; functions only `bm25`, `highlight`,
+`like`, `match`, and `snippet`; and virtual-table module only `fts5`. It requires
+SQLite `>=3.40.0,<4.0.0` with `ENABLE_FTS5`, binds the exact certified SQLite
+version plus compile-option digest, and binds the canonical policy SHA-256 in
+plans, results, manifests, and verifier enrollment. The exact `setlimit`,
+connection initialization, statement-progress, and adapter bounds in ADR 0003
+are mandatory, not implementation defaults.
+
+Report these statuses separately:
+
+```text
+Gate implementation: PASS|FAIL
+Repo SQL supportability: PASS|FAIL
+SQL behavior proof: PASS|FAIL
+```
+
+`SQL behavior proof: PASS` means evaluator-owned controls pass, schema statements
+build only in statically proved sink and statement order, remaining statements
+compile with bounded qmark or named dummy bindings, and required SQLite features exist. Unproved
+cross-function/resource order blocks; the evaluator never reorders SQL to make
+it pass. This does not prove result rows,
+migration correctness, transaction semantics, or application business behavior.
+
+Any required status other than `PASS` makes the repository supportability result
+RED. PostgreSQL, Snowflake, arbitrary SQL commands, configurable exclusions, and
+multi-engine abstraction are not supported by this contract.
+
 ### Acceptance test
 
 The AI must report exactly which validation commands ran, which passed, which failed, and what was not tested.
@@ -701,4 +776,3 @@ Ask these questions:
 10. Did it explain the architectural improvement clearly?
 
 If the answer is mostly no, the AI did not clean the repo. It rearranged the mess.
-
