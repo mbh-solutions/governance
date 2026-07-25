@@ -64,11 +64,17 @@ def bind_checkout(
     config_path: Path,
     standard_path: Path,
     runtime: Mapping[str, Any],
+    workflow_repository: Mapping[str, Any] | None = None,
 ) -> CheckoutReceipt:
     target_root = target_root.resolve()
     evaluator_root = evaluator_root.resolve()
     trusted_repository = _repository_identity(repository)
     trusted_evaluator_repository = _repository_identity(evaluator_repository)
+    trusted_workflow_repository = (
+        trusted_repository
+        if workflow_repository is None
+        else _repository_identity(workflow_repository)
+    )
     _match_event(event, trusted_repository, pull_request)
     pr_identity = _pull_request_identity(pull_request)
     _validate_checkout(target_root, "target")
@@ -77,7 +83,7 @@ def bind_checkout(
     evaluator_identity = _match_evaluator(
         evaluator_root,
         trusted_evaluator_repository,
-        trusted_repository,
+        trusted_workflow_repository,
         workflow,
     )
     config_path = _trusted_input(target_root, config_path, "config")

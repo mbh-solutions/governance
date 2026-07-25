@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 
+from governance_eval.adoption import NATIVE_AUTHORITY_MODE, NATIVE_WORKFLOW_PATH
 from governance_eval.capability_catalog import (
     get_capability_adapter,
     is_profile_runner,
@@ -45,6 +46,7 @@ def build_candidate_bundle(
     profile: str,
     profile_discovery: Mapping[str, Any],
     adoption_manifest_sha256: str,
+    central_workflow: bool = False,
 ) -> dict[str, bytes]:
     receipt_payload = receipt.to_json()
     plan_payload = plan.to_json()
@@ -55,6 +57,7 @@ def build_candidate_bundle(
         workflow_commit_sha,
         workflow_file_sha256,
         event_name,
+        central_workflow,
     )
     plan_assessment = assess_execution_plan_v2(plan_payload, receipt)
     if plan_assessment["capability_status"] != "PASS":
@@ -80,20 +83,29 @@ def build_candidate_bundle(
         "execution-plan.json": _canonical_json(plan_payload),
         "execution-result.json": _canonical_json(result_payload),
     }
+    workflow_identity = {
+        "path": workflow_path,
+        "commit_sha": workflow_commit_sha,
+        "file_sha256": workflow_file_sha256,
+        "event": event_name,
+        "run_id": receipt.workflow["run_id"],
+        "run_attempt": receipt.workflow["run_attempt"],
+        "observed_at": receipt.workflow["observed_at"],
+    }
+    if central_workflow:
+        workflow_identity.update(
+            {
+                "authority": NATIVE_AUTHORITY_MODE,
+                "repository": receipt.evaluator["repository_full_name"],
+                "ref": receipt.workflow["workflow_ref"],
+            }
+        )
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "repository": dict(receipt.repository),
         "pull_request": dict(receipt.pull_request),
         "evaluator": dict(receipt.evaluator),
-        "workflow": {
-            "path": workflow_path,
-            "commit_sha": workflow_commit_sha,
-            "file_sha256": workflow_file_sha256,
-            "event": event_name,
-            "run_id": receipt.workflow["run_id"],
-            "run_attempt": receipt.workflow["run_attempt"],
-            "observed_at": receipt.workflow["observed_at"],
-        },
+        "workflow": workflow_identity,
         "configuration_sha256": receipt.config_sha256,
         "standard_sha256": receipt.standard_sha256,
         "profile": profile,
@@ -216,15 +228,31 @@ def _validate_identity_inputs(
     workflow_commit_sha: str,
     workflow_file_sha256: str,
     event_name: str,
+    central_workflow: bool,
 ) -> None:
-    if workflow_path != ".github/workflows/governance-candidate.yml":
-        raise CandidateBundleError("candidate workflow path is invalid")
     if not _hex(workflow_commit_sha, 40) or not _hex(workflow_file_sha256, 64):
         raise CandidateBundleError("candidate workflow identity is invalid")
     if event_name != "pull_request":
         raise CandidateBundleError("candidate event is invalid")
-    if workflow_commit_sha != receipt["pull_request"]["head_sha"]:
-        raise CandidateBundleError("candidate workflow commit is not the PR head")
+    expected_path = (
+        NATIVE_WORKFLOW_PATH
+        if central_workflow
+        else ".github/workflows/governance-candidate.yml"
+    )
+    expected_commit = (
+        receipt["evaluator"]["commit_sha"]
+        if central_workflow
+        else receipt["pull_request"]["head_sha"]
+    )
+    if workflow_path != expected_path or workflow_commit_sha != expected_commit:
+        raise CandidateBundleError("candidate workflow binding is invalid")
+    if central_workflow:
+        expected_ref = (
+            f"{receipt['evaluator']['repository_full_name']}/"
+            f"{workflow_path}@{workflow_commit_sha}"
+        )
+        if receipt["workflow"]["workflow_ref"] != expected_ref:
+            raise CandidateBundleError("central workflow ref is invalid")
 
 
 def _hex(value: Any, length: int) -> bool:

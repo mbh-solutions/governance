@@ -1,0 +1,143 @@
+name: Governance Native Required
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native-decision:
+    name: Governance Native Decision
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Bind exact central workflow identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          repository="${GITHUB_WORKFLOW_REF%%/.github/workflows/*}"
+          test "$GITHUB_EVENT_NAME" = "pull_request"
+          test "$repository" = "mbh-solutions/governance"
+          test "$GITHUB_WORKFLOW_REF" = "${repository}/.github/workflows/governance-required.yml@${GITHUB_WORKFLOW_SHA}"
+          printf 'repository=%s\nsha=%s\n' \
+            "$repository" "$GITHUB_WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout exact target head and base
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: target
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout exact central Governance source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          repository: ${{ steps.identity.outputs.repository }}
+          ref: ${{ steps.identity.outputs.sha }}
+          path: .governance/evaluator
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up exact Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.13"
+          check-latest: false
+
+      - name: Pull exact candidate runtime image
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+        run: |
+          set -euo pipefail
+          timeout 120 docker pull "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"
+
+      - name: Provision exact Governance evaluator
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-native-toolchain"
+          install_source="${RUNNER_TEMP}/governance-native-source"
+          mkdir -p "$install_source"
+          git -C .governance/evaluator archive --format=tar HEAD \
+            | tar -xf - -C "$install_source"
+          python -m venv "$runtime"
+          "$runtime/bin/python" -I -m pip install \
+            --disable-pip-version-check \
+            --require-hashes \
+            --only-binary=:all: \
+            -r .governance/evaluator/requirements-governance.lock
+          "$runtime/bin/python" -I -m pip install \
+            --disable-pip-version-check \
+            --no-deps \
+            --no-build-isolation \
+            "$install_source"
+
+      - name: Run native Governance decision
+        id: evaluation
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ""
+          GITHUB_TOKEN: ""
+          PYTHONHOME: ""
+          PYTHONPATH: ""
+        run: |
+          set -euo pipefail
+          runtime="${RUNNER_TEMP}/governance-native-toolchain"
+          "$runtime/bin/python" -I -m governance_eval.candidate_pipeline \
+            --authority-mode "github.organization_required_workflow.v1" \
+            --target-root "${GITHUB_WORKSPACE}/target" \
+            --evaluator-root "${GITHUB_WORKSPACE}/.governance/evaluator" \
+            --event-path "${GITHUB_EVENT_PATH}" \
+            --config-path "${GITHUB_WORKSPACE}/target/.github/governance/supportability.yml" \
+            --standard-path "${GITHUB_WORKSPACE}/target/.github/governance/supportability-standard.md" \
+            --workflow-path ".github/workflows/governance-required.yml" \
+            --workflow-repository "${{ steps.identity.outputs.repository }}" \
+            --workflow-ref "${GITHUB_WORKFLOW_REF}" \
+            --workflow-commit-sha "${GITHUB_WORKFLOW_SHA}" \
+            --evaluator-sha "${GITHUB_WORKFLOW_SHA}" \
+            --run-id "${GITHUB_RUN_ID}" \
+            --run-attempt "${GITHUB_RUN_ATTEMPT}" \
+            --toolchain-root "$runtime" \
+            --output-dir "${RUNNER_TEMP}/governance-native-evidence"
+
+      - name: Upload diagnostic native evidence
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: governance-native-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/governance-native-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Enforce native Governance decision
+        if: ${{ always() }}
+        shell: bash
+        env:
+          EVALUATION_OUTCOME: ${{ steps.evaluation.outcome }}
+        run: |
+          set -euo pipefail
+          test "$EVALUATION_OUTCOME" = "success"
+          "${RUNNER_TEMP}/governance-native-toolchain/bin/python" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["RUNNER_TEMP"]) / "governance-native-evidence" / "candidate-bundle.json"
+          decision = json.loads(path.read_text(encoding="utf-8"))["decision"]
+          print(json.dumps(decision, sort_keys=True))
+          raise SystemExit(decision.get("status") != "PASS")
+          PY

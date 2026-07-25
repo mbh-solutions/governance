@@ -2,17 +2,18 @@
 
 This repository publishes repo-agnostic Governance components. Adopter repositories supply typed configuration and pin an exact certified Governance SHA. Governance source uses separate source qualification; every Governance product workflow on Governance source is diagnostic.
 
-## Merge decision
+## Native merge decision
 
 GREEN requires:
 
 - configured deterministic gates pass;
 - architecture implementation and behavior proof pass;
-- the Codex connector evidence snapshot is complete, fully paginated, exact-head bound, and collected after the five-minute review window;
-- every in-window Codex P0-P2 finding is resolved;
-- the delivery receipt binds the PR head, workflow run, and uploaded evidence artifact.
+- the exact target, pull request, base, head, central workflow repository, and central workflow SHA are bound;
+- the typed configuration, adoption manifest, Supportability Standard, evaluator, toolchain, and runtime identities match;
+- the evaluator-owned profile completes with no blocking deterministic result;
+- the stable final decision job succeeds.
 
-Codex is evidence, not approval. A valid post-cutoff reconciliation with no exact-head Codex response records `AI_REVIEW_UNAVAILABLE` and does not block. Missing, malformed, incomplete, stale, or digest-invalid collection evidence is RED. Copilot is not a required reviewer, gate, receipt input, or dependency.
+Codex is evidence, not approval. `AI_REVIEW_UNAVAILABLE` never skips deterministic evaluation. Copilot is not a required reviewer, gate, receipt input, or dependency.
 
 ## Target configuration
 
@@ -29,32 +30,18 @@ These values are fixed by schema. Target repositories cannot substitute reviewer
 
 ## Event model
 
-The standard adopter profile accepts only `pull_request_target` request evidence for these pull-request head transitions:
+The organization-required central workflow uses unfiltered `pull_request`. GitHub supplies the target event identity plus the required workflow repository, ref, and SHA. The workflow checks out the exact target head without persisted credentials and obtains the evaluator from that exact protected central SHA.
 
-- `opened`
-- `reopened`
-- `synchronize`
-- `ready_for_review`
-
-Candidate execution belongs in a separate `pull_request` workflow with no secrets, no write token, and no authoritative check identity. It may upload only untrusted evidence. The external verifier never checks out or executes candidate code; it validates hostile artifacts and exact identities before its dedicated GitHub App publishes the adopter's required result. Merge-group support is a later optional profile and requires live eligibility proof.
+The target has no Governance caller to modify. Candidate content remains untrusted and runs only inside the existing bounded containment model. Merge-group support is a later optional profile and requires live eligibility and event-authority proof.
 
 ## Required checks
 
-On Governance source, require only `Governance Source Qualification`; product contexts are diagnostic. On an adopter, require the one stable context published by the dedicated external verifier App. Apply protection only through the evidence-backed procedure in `TASK.md`.
+On Governance source, require only `Governance Source Qualification`; product contexts are diagnostic. On an adopter, an organization ruleset requires the exact central workflow at the certified Governance SHA. Its stable final job is authoritative because GitHub binds it to the required-workflow rule; a local similarly named workflow is not a substitute. Apply protection only through the guarded procedure in `TASK.md`.
 
 ## Evidence artifacts
 
-The supportability artifact contains:
-
-- `supportability-gate-result.json`
-- `architecture-gate-result.json`
-- `architecture-gate-result.md`
-- `codex-connector-snapshot.json`
-- `codex-connector-evidence-result.json`
-- `ai-review-gate-result.json`
-
-The delivery workflow rejects missing artifacts, mismatched artifact digests, invalid nested status, claimed AI approval, and GitHub run or PR identity mismatches.
+The native workflow records checkout, plan, execution, and final candidate-bundle receipts. Artifact upload is diagnostic only: no relay, poller, App, or copied status consumes it to authorize merge. The final job reads the host-owned local receipt and fails for a missing receipt or any decision other than `PASS`.
 
 ## Adoption boundary
 
-Do not roll this framework into application repositories until exact publication qualification, verifier-App binding, rollback proof, and every disposable positive/negative canary pass. Target repositories remain read-only until an explicit installation.
+Do not roll this framework into application repositories until exact publication qualification, organization-ruleset binding, rollback proof, and every disposable positive/negative canary pass. Target repositories remain read-only until an explicit installation. The external verifier is a legacy optional path retained for historical installations and receipts; it is not a native release dependency.

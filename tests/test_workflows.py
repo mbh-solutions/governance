@@ -98,6 +98,57 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("PHASE1_SHADOW", action)
         self.assertNotIn("GITHUB_PATH", action)
 
+    def test_native_required_workflow_is_central_read_only_and_fail_closed(
+        self,
+    ) -> None:
+        workflow = (self.root / ".github/workflows/governance-required.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("on:\n  pull_request:\n", workflow)
+        for forbidden in (
+            "pull_request_target",
+            "merge_group:",
+            "workflow_dispatch:",
+            "schedule:",
+            "branches:",
+            "paths:",
+            "types:",
+            "secrets.",
+            "private-key",
+            "checks: write",
+            "statuses: write",
+            "needs:",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, workflow)
+        self.assertEqual(workflow.count("permissions:"), 1)
+        self.assertIn("permissions:\n  contents: read\n", workflow)
+        self.assertEqual(workflow.count("timeout-minutes: 10"), 1)
+        self.assertEqual(workflow.count("persist-credentials: false"), 2)
+        actions = {
+            "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10": 2,
+            "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1": 1,
+            "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f": 1,
+        }
+        self.assertEqual(workflow.count("uses:"), sum(actions.values()))
+        for action, count in actions.items():
+            with self.subTest(action=action):
+                self.assertEqual(workflow.count(f"uses: {action}"), count)
+        for binding in (
+            'test "$repository" = "mbh-solutions/governance"',
+            "${{ github.event.pull_request.head.sha }}",
+            'test "$GITHUB_WORKFLOW_REF" =',
+            '--authority-mode "github.organization_required_workflow.v1"',
+            '--workflow-commit-sha "${GITHUB_WORKFLOW_SHA}"',
+            "continue-on-error: true",
+            "if: ${{ always() }}",
+            'test "$EVALUATION_OUTCOME" = "success"',
+            'raise SystemExit(decision.get("status") != "PASS")',
+        ):
+            with self.subTest(binding=binding):
+                self.assertIn(binding, workflow)
+
     def test_shadow_workflow_runs_on_merge_group_sha(self) -> None:
         workflow = (self.root / ".github/workflows/governance-shadow.yml").read_text(
             encoding="utf-8"

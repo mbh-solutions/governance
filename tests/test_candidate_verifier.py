@@ -21,9 +21,14 @@ from governance_eval.artifact_verifier import (
 )
 from governance_eval.candidate_bundle import (
     CandidateBundleError,
+    _validate_identity_inputs,
     artifact_name,
     build_candidate_bundle,
     recompute_decision,
+)
+from governance_eval.adoption import (
+    NATIVE_GOVERNANCE_REPOSITORY,
+    NATIVE_WORKFLOW_PATH,
 )
 from governance_eval.hashing import sha256_json
 from governance_eval.sqlite_policy import POLICY_SHA256
@@ -233,6 +238,40 @@ class CandidateBundleTests(unittest.TestCase):
                     result=result,
                     ai_review={"status": "AI_REVIEW_UNAVAILABLE", "findings": []},
                     **{**defaults, **mutation},
+                )
+
+    def test_central_workflow_binds_evaluator_commit_and_ref(self) -> None:
+        _, _, receipt = _result()
+        payload = receipt.to_json()
+        payload["evaluator"]["repository_full_name"] = NATIVE_GOVERNANCE_REPOSITORY
+        commit = payload["evaluator"]["commit_sha"]
+        payload["workflow"]["workflow_ref"] = (
+            f"{NATIVE_GOVERNANCE_REPOSITORY}/{NATIVE_WORKFLOW_PATH}@{commit}"
+        )
+
+        _validate_identity_inputs(
+            payload,
+            NATIVE_WORKFLOW_PATH,
+            commit,
+            WORKFLOW_FILE_SHA256,
+            "pull_request",
+            True,
+        )
+        for path, sha in (
+            (".github/workflows/attacker.yml", commit),
+            (NATIVE_WORKFLOW_PATH, payload["pull_request"]["head_sha"]),
+        ):
+            with (
+                self.subTest(path=path, sha=sha),
+                self.assertRaises(CandidateBundleError),
+            ):
+                _validate_identity_inputs(
+                    payload,
+                    path,
+                    sha,
+                    WORKFLOW_FILE_SHA256,
+                    "pull_request",
+                    True,
                 )
 
 
