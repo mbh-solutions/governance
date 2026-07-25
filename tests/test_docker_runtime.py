@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+import json
 import shutil
 import subprocess
 import unittest
 import os
+import stat
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from tempfile import TemporaryDirectory
@@ -17,6 +20,7 @@ from governance_eval.docker_runtime import (
     execute_ruff_docker,
     runtime_root_path,
 )
+from governance_eval.artifact_verifier import MAX_ENTRY_BYTES
 import governance_eval.docker_runtime as docker_runtime
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
@@ -25,6 +29,71 @@ from test_execution_plan_v2 import _receipt
 
 
 class DockerRuntimePolicyTests(unittest.TestCase):
+    def test_sqlite_profile_reader_uses_artifact_entry_limit(self) -> None:
+        payload = {
+            "schema_version": "1.0",
+            "profile": "python.sqlite.v1",
+            "status": "PASS",
+        }
+        raw = json.dumps(payload).encode("utf-8")
+        compact = {
+            **payload,
+            "capabilities_path": ".governance-output/sqlite-profile.json",
+            "capabilities_sha256": sha256(raw).hexdigest(),
+        }
+        workspace = Path("C:/workspace")
+
+        with mock.patch(
+            "governance_eval.docker_runtime._read_regular_file", return_value=raw
+        ) as reader:
+            self.assertEqual(
+                docker_runtime._load_sqlite_profile(compact, workspace), payload
+            )
+
+        reader.assert_called_once_with(
+            workspace / ".governance-output/sqlite-profile.json", MAX_ENTRY_BYTES
+        )
+
+    def test_sqlite_profile_file_open_is_nonblocking_and_regular_only(self) -> None:
+        compact = {
+            "schema_version": "1.0",
+            "profile": "python.sqlite.v1",
+            "status": "PASS",
+            "capabilities_path": ".governance-output/sqlite-profile.json",
+            "capabilities_sha256": "0" * 64,
+        }
+        with TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            path = workspace / compact["capabilities_path"]
+            path.parent.mkdir()
+            path.write_text("{}", encoding="utf-8")
+            hostile = SimpleNamespace(
+                st_mode=stat.S_IFIFO,
+                st_size=2,
+                st_dev=1,
+                st_ino=1,
+                st_mtime_ns=1,
+                st_ctime_ns=1,
+            )
+            with mock.patch(
+                "governance_eval.docker_runtime.os.fstat", return_value=hostile
+            ) as fstat:
+                self.assertIsNone(
+                    docker_runtime._load_sqlite_profile(compact, workspace)
+                )
+            self.assertEqual(fstat.call_count, 1)
+
+        with mock.patch(
+            "governance_eval.docker_runtime.os.open", side_effect=OSError
+        ) as opened:
+            self.assertIsNone(
+                docker_runtime._load_sqlite_profile(compact, Path("unused"))
+            )
+        flags = opened.call_args.args[1]
+        self.assertEqual(
+            flags & getattr(os, "O_NONBLOCK", 0), getattr(os, "O_NONBLOCK", 0)
+        )
+
     def test_subprocess_environments_drop_host_injection_variables(self) -> None:
         executable = Path("C:/trusted/tool.exe")
         with mock.patch.dict(

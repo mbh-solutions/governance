@@ -55,6 +55,34 @@ class CandidatePipelineConfigurationTests(unittest.TestCase):
             ):
                 _validate_configuration(config, standard, "a" * 40)
 
+    def test_selects_exact_sqlite_profile_and_rejects_adapter_omission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            standard = root / "standard.md"
+            standard.write_text("fixed standard\n", encoding="utf-8")
+            config = root / "supportability.yml"
+            payload = _configuration(
+                "a" * 40,
+                4378147,
+                sha256_file(standard),
+                profile="python.sqlite.v1",
+            )
+            config.write_text(json.dumps(payload), encoding="utf-8")
+
+            self.assertEqual(
+                _validate_configuration(config, standard, "a" * 40),
+                "python.sqlite.v1",
+            )
+
+            for label, hostile in (
+                ("omission", {**payload, "adapters": payload["adapters"][:-1]}),
+                ("substitution", {**payload, "profile": "python.standard.v1"}),
+            ):
+                with self.subTest(label=label):
+                    config.write_text(json.dumps(hostile), encoding="utf-8")
+                    with self.assertRaises(CandidatePipelineError):
+                        _validate_configuration(config, standard, "a" * 40)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,23 +1,36 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
+import os
 import stat
 import tempfile
 import unittest
+import zipfile
+from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
+from unittest import mock
 
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import (
+    SQLITE_PROFILE_ADAPTERS,
+    STANDARD_PROFILE_ADAPTERS,
+    get_capability_adapter,
+)
+from governance_eval.candidate_bundle import recompute_decision
 from governance_eval.docker_runtime import _profile_payload
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
 from governance_eval.standard_profile import (
     PROFILE_MARKER,
+    SQLITE_PROFILE_MARKER,
+    _apply_wheel_closure,
     _fixed_commands,
     _import_cycle_errors,
     _integrity_result,
     _release_workspace_directories,
     _source_snapshot,
+    _write_sqlite_profile,
 )
 from governance_eval.unittest_runner import _accepted
 from test_execution_plan_v2 import _receipt
@@ -32,7 +45,101 @@ def _stream(content: bytes) -> dict[str, object]:
     }
 
 
+def _canonical_sha256(value: object) -> str:
+    return sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 class StandardProfileTests(unittest.TestCase):
+    def test_standard_profile_does_not_add_sqlite_source_closure(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr("package/generated.py", "VALUE = 1\n")
+        package_result = {"status": "PASS", "evidence": {"errors": []}}
+
+        _apply_wheel_closure(
+            "python.standard.v1", buffer.getvalue(), package_result, None, []
+        )
+
+        self.assertEqual(package_result["status"], "PASS")
+        self.assertEqual(package_result["evidence"]["errors"], [])
+
+    def test_standard_profile_matches_rollback_golden_bytes(self) -> None:
+        golden = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "fixtures/sqlite/standard_profile_rollback_golden.json"
+            ).read_text(encoding="utf-8")
+        )
+        capabilities = [
+            {
+                "capability": capability,
+                "adapter_id": adapter_id,
+                "assurance_class": assurance,
+                "status": "PASS",
+                "evidence": {},
+            }
+            for capability, adapter_id, assurance in STANDARD_PROFILE_ADAPTERS
+        ]
+        payload = {
+            "schema_version": "1.0",
+            "profile": "python.standard.v1",
+            "status": "PASS",
+            "capabilities": capabilities,
+        }
+        framed = (
+            PROFILE_MARKER
+            + json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            + "\n"
+        )
+
+        self.assertEqual(
+            golden["rollback_sha"], "c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86"
+        )
+        adapters = [list(item) for item in STANDARD_PROFILE_ADAPTERS]
+        self.assertEqual(adapters, golden["standard_profile_adapters"])
+        self.assertEqual(
+            _canonical_sha256(adapters), golden["standard_profile_adapters_sha256"]
+        )
+        runner = json.loads(
+            json.dumps(
+                asdict(
+                    get_capability_adapter(
+                        "standard_profile", "python.standard-profile.v1"
+                    )
+                )
+            )
+        )
+        self.assertEqual(runner, golden["runner"])
+        self.assertEqual(_canonical_sha256(runner), golden["runner_sha256"])
+        step = compile_execution_plan_v2(
+            _receipt(),
+            capability="standard_profile",
+            adapter_id="python.standard-profile.v1",
+        ).step
+        self.assertEqual(step, golden["standard_plan_step"])
+        self.assertEqual(_canonical_sha256(step), golden["standard_plan_step_sha256"])
+        self.assertEqual(framed, golden["canonical_profile_payload"])
+        self.assertEqual(
+            sha256(framed.encode()).hexdigest(),
+            golden["canonical_profile_payload_sha256"],
+        )
+        ai = {"status": "AI_REVIEW_UNAVAILABLE", "findings": []}
+        pass_decision = recompute_decision({"capability_status": "PASS"}, ai, "a" * 40)
+        blocking_decision = recompute_decision(
+            {"capability_status": "BLOCK_TECHNICAL"}, ai, "a" * 40
+        )
+        self.assertEqual(pass_decision, golden["pass_decision"])
+        self.assertEqual(
+            _canonical_sha256(pass_decision), golden["pass_decision_sha256"]
+        )
+        self.assertEqual(blocking_decision, golden["blocking_decision"])
+        self.assertEqual(
+            _canonical_sha256(blocking_decision),
+            golden["blocking_decision_sha256"],
+        )
+
     def test_unittest_rejects_zero_and_skipped_only(self) -> None:
         self.assertFalse(
             _accepted(
@@ -112,6 +219,17 @@ class StandardProfileTests(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o777)
 
+    def test_sqlite_profile_sidecar_is_host_readable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / ".governance-output").mkdir()
+            with mock.patch(
+                "governance_eval.standard_profile.os.fchmod", wraps=os.fchmod
+            ) as chmod:
+                _write_sqlite_profile(workspace, {"status": "PASS"})
+
+            self.assertEqual(chmod.call_args.args[1], 0o644)
+
     def test_profile_marker_requires_exact_typed_capabilities(self) -> None:
         plan = compile_execution_plan_v2(
             _receipt(),
@@ -145,6 +263,61 @@ class StandardProfileTests(unittest.TestCase):
             PROFILE_MARKER + json.dumps(payload, separators=(",", ":")) + "\n"
         ).encode()
         self.assertIsNone(_profile_payload(plan, {"stdout": _stream(hostile)}))
+
+    def test_sqlite_profile_marker_requires_appended_exact_capability(self) -> None:
+        plan = compile_execution_plan_v2(
+            _receipt(),
+            capability="standard_profile",
+            adapter_id="python.sqlite-profile.v1",
+        )
+        capabilities = [
+            {
+                "capability": capability,
+                "adapter_id": adapter_id,
+                "assurance_class": assurance,
+                "status": "PASS",
+                "evidence": {},
+            }
+            for capability, adapter_id, assurance in SQLITE_PROFILE_ADAPTERS
+        ]
+        payload = {
+            "schema_version": "1.0",
+            "profile": "python.sqlite.v1",
+            "status": "PASS",
+            "capabilities": capabilities,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            output = workspace / ".governance-output" / "sqlite-profile.json"
+            output.parent.mkdir()
+
+            def encoded(value: dict[str, object]) -> bytes:
+                content = json.dumps(value, separators=(",", ":")).encode()
+                output.write_bytes(content)
+                compact = {
+                    "schema_version": "1.0",
+                    "profile": "python.sqlite.v1",
+                    "status": "PASS",
+                    "capabilities_path": ".governance-output/sqlite-profile.json",
+                    "capabilities_sha256": sha256(content).hexdigest(),
+                }
+                return (
+                    SQLITE_PROFILE_MARKER
+                    + json.dumps(compact, separators=(",", ":"))
+                    + "\n"
+                ).encode()
+
+            self.assertEqual(
+                _profile_payload(
+                    plan, {"stdout": _stream(encoded(payload))}, workspace
+                ),
+                capabilities,
+            )
+
+            payload["capabilities"] = capabilities[:-1]
+            self.assertIsNone(
+                _profile_payload(plan, {"stdout": _stream(encoded(payload))}, workspace)
+            )
 
 
 if __name__ == "__main__":

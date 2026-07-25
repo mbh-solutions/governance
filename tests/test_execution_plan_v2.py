@@ -14,6 +14,7 @@ from governance_eval.execution_plan_v2 import (
 )
 from governance_eval.hashing import sha256_json
 from governance_eval.schemas import validate_named
+from governance_eval.sqlite_policy import POLICY_SHA256
 
 
 def _receipt() -> CheckoutReceipt:
@@ -85,6 +86,36 @@ class ExecutionPlanV2Tests(unittest.TestCase):
                 "/workspace",
                 "--benchmark-root",
                 "/opt/governance-toolchain/benchmark",
+                "--evaluator-sha",
+                "e" * 40,
+            ],
+        )
+
+    def test_compiles_fixed_sqlite_profile_as_standard_extension(self) -> None:
+        plan = compile_execution_plan_v2(
+            _receipt(),
+            capability="standard_profile",
+            adapter_id="python.sqlite-profile.v1",
+        )
+
+        payload = plan.to_json()
+        validate_named("execution_plan_v2", payload)
+        self.assertEqual(payload["step"]["timeout_seconds"], 300)
+        self.assertEqual(payload["step"]["sqlite_policy_sha256"], POLICY_SHA256)
+        self.assertEqual(
+            payload["step"]["argv"],
+            [
+                "python",
+                "-P",
+                "-s",
+                "-m",
+                "governance_eval.standard_profile",
+                "--workspace",
+                "/workspace",
+                "--benchmark-root",
+                "/opt/governance-toolchain/benchmark",
+                "--profile",
+                "python.sqlite.v1",
                 "--evaluator-sha",
                 "e" * 40,
             ],

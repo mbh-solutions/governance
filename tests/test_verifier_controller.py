@@ -9,6 +9,8 @@ from typing import Any, Mapping
 from unittest import mock
 
 from governance_eval.artifact_verifier import REQUIRED_CONTEXT
+from governance_eval.sqlite_policy import POLICY_SHA256
+from governance_eval.schema_validator import validate
 from governance_eval.verifier_controller import (
     ControllerError,
     Enrollment,
@@ -121,6 +123,98 @@ class VerifierControllerTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaises(ControllerError):
+                load_registry(
+                    path,
+                    governance_sha=self.enrollment.governance_sha,
+                    verifier_app_id=self.enrollment.verifier_app_id,
+                )
+
+    def test_registry_defaults_legacy_standard_and_requires_sqlite_manifest(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "enrollments.json"
+            legacy = {
+                key: value
+                for key, value in self.enrollment.__dict__.items()
+                if key
+                not in {
+                    "profile",
+                    "adoption_manifest_sha256",
+                    "sqlite_policy_sha256",
+                }
+            }
+            path.write_text(
+                json.dumps({"schema_version": "1.0", "repositories": [legacy]}),
+                encoding="utf-8",
+            )
+            loaded = load_registry(
+                path,
+                governance_sha=self.enrollment.governance_sha,
+                verifier_app_id=self.enrollment.verifier_app_id,
+            )
+            self.assertEqual(loaded[0].profile, "python.standard.v1")
+
+            legacy["sqlite_policy_sha256"] = ""
+            path.write_text(
+                json.dumps({"schema_version": "1.0", "repositories": [legacy]}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ControllerError):
+                load_registry(
+                    path,
+                    governance_sha=self.enrollment.governance_sha,
+                    verifier_app_id=self.enrollment.verifier_app_id,
+                )
+            del legacy["sqlite_policy_sha256"]
+
+            sqlite = {
+                **legacy,
+                "profile": "python.sqlite.v1",
+                "adoption_manifest_sha256": "9" * 64,
+                "sqlite_policy_sha256": POLICY_SHA256,
+            }
+            path.write_text(
+                json.dumps({"schema_version": "1.0", "repositories": [sqlite]}),
+                encoding="utf-8",
+            )
+            loaded = load_registry(
+                path,
+                governance_sha=self.enrollment.governance_sha,
+                verifier_app_id=self.enrollment.verifier_app_id,
+            )
+            self.assertEqual(loaded[0].profile, "python.sqlite.v1")
+            schema = json.loads(
+                (
+                    Path(__file__).resolve().parents[1]
+                    / "schemas/v1/verifier_enrollment.schema.json"
+                ).read_text(encoding="utf-8")
+            )
+            validate({"schema_version": "1.0", "repositories": [sqlite]}, schema)
+
+            for policy in (None, "0" * 64):
+                hostile = dict(sqlite)
+                if policy is None:
+                    hostile.pop("sqlite_policy_sha256")
+                else:
+                    hostile["sqlite_policy_sha256"] = policy
+                path.write_text(
+                    json.dumps({"schema_version": "1.0", "repositories": [hostile]}),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(ControllerError, "policy"):
+                    load_registry(
+                        path,
+                        governance_sha=self.enrollment.governance_sha,
+                        verifier_app_id=self.enrollment.verifier_app_id,
+                    )
+
+            del sqlite["adoption_manifest_sha256"]
+            path.write_text(
+                json.dumps({"schema_version": "1.0", "repositories": [sqlite]}),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ControllerError, "manifest"):
                 load_registry(
                     path,
                     governance_sha=self.enrollment.governance_sha,

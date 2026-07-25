@@ -12,8 +12,18 @@ from governance_eval.adopter_template import (
     render_candidate_workflow,
     validate_candidate_workflow,
 )
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import (
+    PROFILE_ADAPTERS,
+    STANDARD_PROFILE_ADAPTERS,
+    profile_adapters,
+)
 from governance_eval.hashing import sha256_bytes
+from governance_eval.sqlite_supportability import (
+    SQLiteSupportabilityError,
+    discover_repository_profile,
+    validate_profile_discovery,
+)
+from governance_eval.sqlite_policy import POLICY_SHA256
 
 
 GOVERNANCE_REPOSITORY = "markheck-solutions/governance"
@@ -43,6 +53,7 @@ def generate_adoption_bundle(
     verifier_app_id: int,
     rollback_sha: str,
     source_root: Path | None = None,
+    profile: str = PROFILE_ID,
 ) -> dict[str, Any]:
     _validate_bindings(
         github_repository,
@@ -50,16 +61,24 @@ def generate_adoption_bundle(
         governance_sha,
         verifier_app_id,
         rollback_sha,
+        profile,
     )
     target = repo_root.resolve(strict=True)
     before = _clean_git_state(target)
+    discovery = discover_repository_profile(target)
+    try:
+        validate_profile_discovery(discovery, selected_profile=profile)
+    except SQLiteSupportabilityError as exc:
+        raise AdoptionError(str(exc)) from exc
     output = _new_external_directory(output_dir, target)
     workflow = render_candidate_workflow(
         _asset("governance-candidate.yml", source_root), governance_sha
     )
     standard = _asset("supportability-standard.md", source_root).read_bytes()
     config = _canonical_json(
-        _configuration(governance_sha, verifier_app_id, sha256_bytes(standard))
+        _configuration(
+            governance_sha, verifier_app_id, sha256_bytes(standard), profile=profile
+        )
     )
     payloads = {
         CONFIG_PATH: config,
@@ -75,6 +94,7 @@ def generate_adoption_bundle(
         governance_sha=governance_sha,
         verifier_app_id=verifier_app_id,
         rollback_sha=rollback_sha,
+        profile=profile,
     )
     _write(output / MANIFEST_PATH, _canonical_json(manifest))
     if _clean_git_state(target) != before:
@@ -94,6 +114,12 @@ def prove_adoption_bundle(
     bundle = bundle_dir.resolve(strict=True)
     manifest = _load_json(_safe_file(bundle, MANIFEST_PATH))
     _validate_manifest(manifest, github_repository, before)
+    profile = str(manifest["profile"])
+    discovery = discover_repository_profile(target)
+    try:
+        validate_profile_discovery(discovery, selected_profile=profile)
+    except SQLiteSupportabilityError as exc:
+        raise AdoptionError(str(exc)) from exc
     _validate_file_set(bundle, manifest)
     config = _load_json(_safe_file(bundle, CONFIG_PATH))
     _validate_config_against_manifest(config, manifest)
@@ -108,7 +134,7 @@ def prove_adoption_bundle(
         "target": manifest["target"],
         "governance": manifest["governance"],
         "verifier": manifest["verifier"],
-        "profile": PROFILE_ID,
+        "profile": profile,
         "capabilities": [
             {
                 "capability": capability,
@@ -116,8 +142,9 @@ def prove_adoption_bundle(
                 "assurance_class": assurance,
                 "status": "SUPPORTED",
             }
-            for capability, adapter_id, assurance in ADAPTERS
+            for capability, adapter_id, assurance in profile_adapters(profile)
         ],
+        "profile_discovery": discovery,
         "bundle_sha256": manifest["bundle_sha256"],
         "files": manifest["files"],
     }
@@ -127,15 +154,19 @@ def prove_adoption_bundle(
 
 
 def _configuration(
-    governance_sha: str, verifier_app_id: int, standard_sha256: str
+    governance_sha: str,
+    verifier_app_id: int,
+    standard_sha256: str,
+    *,
+    profile: str = PROFILE_ID,
 ) -> dict[str, Any]:
     return {
         "schema_version": "2.0",
-        "profile": PROFILE_ID,
+        "profile": profile,
         "python_version": "3.12",
         "adapters": [
             {"capability": capability, "adapter_id": adapter_id}
-            for capability, adapter_id, _assurance in ADAPTERS
+            for capability, adapter_id, _assurance in profile_adapters(profile)
         ],
         "governance": {
             "repository": GOVERNANCE_REPOSITORY,
@@ -150,16 +181,100 @@ def _configuration(
 
 
 def validate_adoption_config(
-    value: Mapping[str, Any], *, governance_sha: str, verifier_app_id: int
+    value: Mapping[str, Any],
+    *,
+    governance_sha: str,
+    verifier_app_id: int,
+    profile: str | None = None,
 ) -> None:
+    selected = value.get("profile") if profile is None else profile
+    if not isinstance(selected, str) or selected not in PROFILE_ADAPTERS:
+        raise AdoptionError("adoption profile is unsupported")
     standard = value.get("standard")
     candidate_hash = standard.get("sha256") if isinstance(standard, Mapping) else ""
     if not isinstance(candidate_hash, str) or not re.fullmatch(
         r"[0-9a-f]{64}", candidate_hash
     ):
         raise AdoptionError("adoption standard hash is invalid")
-    if dict(value) != _configuration(governance_sha, verifier_app_id, candidate_hash):
+    if dict(value) != _configuration(
+        governance_sha, verifier_app_id, candidate_hash, profile=selected
+    ):
         raise AdoptionError("adoption configuration differs from fixed Python profile")
+
+
+def validate_adoption_manifest(
+    value: Mapping[str, Any],
+    *,
+    repository: str,
+    repository_id: int,
+    governance_sha: str,
+    verifier_app_id: int,
+    profile: str,
+) -> None:
+    _validate_manifest_shape(value)
+    if value.get("profile") != profile:
+        raise AdoptionError("adoption manifest profile is invalid")
+    if (
+        profile == "python.sqlite.v1"
+        and value.get("sqlite_policy_sha256") != POLICY_SHA256
+    ):
+        raise AdoptionError("adoption SQLite policy binding is invalid")
+    target = _mapping(value.get("target"), "target binding")
+    _validate_manifest_target(target, repository, repository_id)
+    governance = _mapping(value.get("governance"), "governance binding")
+    if set(governance) != {"repository", "sha", "rollback_sha"} or governance != {
+        "repository": GOVERNANCE_REPOSITORY,
+        "sha": governance_sha,
+        "rollback_sha": governance.get("rollback_sha"),
+    }:
+        raise AdoptionError("adoption Governance binding is invalid")
+    rollback = governance.get("rollback_sha")
+    if not isinstance(rollback, str) or not _SHA_RE.fullmatch(rollback):
+        raise AdoptionError("adoption rollback binding is invalid")
+    verifier = _mapping(value.get("verifier"), "verifier binding")
+    if verifier != {"app_id": verifier_app_id, "required_context": REQUIRED_CONTEXT}:
+        raise AdoptionError("adoption verifier binding is invalid")
+    files = _mapping(value.get("files"), "file bindings")
+    _validate_manifest_file_receipts(files)
+
+
+def _validate_manifest_target(
+    target: Mapping[str, Any], repository: str, repository_id: int
+) -> None:
+    if set(target) != {
+        "repository",
+        "repository_id",
+        "head_sha",
+        "tree_sha",
+        "status_sha256",
+    }:
+        raise AdoptionError("adoption target binding fields are invalid")
+    if (
+        target.get("repository") != repository
+        or target.get("repository_id") != repository_id
+    ):
+        raise AdoptionError("adoption target repository binding is invalid")
+    if any(
+        not isinstance(target.get(name), str)
+        or not _SHA_RE.fullmatch(str(target[name]))
+        for name in ("head_sha", "tree_sha")
+    ) or not re.fullmatch(r"[0-9a-f]{64}", str(target.get("status_sha256"))):
+        raise AdoptionError("adoption target Git binding is invalid")
+
+
+def _validate_manifest_file_receipts(files: Mapping[str, Any]) -> None:
+    if set(files) != set(_BUNDLE_FILES):
+        raise AdoptionError("adoption manifest file set is invalid")
+    for receipt in files.values():
+        item = _mapping(receipt, "file receipt")
+        if (
+            set(item) != {"bytes", "sha256"}
+            or not isinstance(item.get("bytes"), int)
+            or isinstance(item.get("bytes"), bool)
+            or item["bytes"] < 1
+            or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256")))
+        ):
+            raise AdoptionError("adoption file receipt is invalid")
 
 
 def _manifest(
@@ -171,10 +286,11 @@ def _manifest(
     governance_sha: str,
     verifier_app_id: int,
     rollback_sha: str,
+    profile: str,
 ) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema_version": "1.0",
-        "profile": PROFILE_ID,
+        "profile": profile,
         "target": {
             "repository": repository,
             "repository_id": repository_id,
@@ -194,6 +310,8 @@ def _manifest(
             for name, payload in sorted(payloads.items())
         },
     }
+    if profile == "python.sqlite.v1":
+        value["sqlite_policy_sha256"] = POLICY_SHA256
     value["bundle_sha256"] = sha256_bytes(_canonical_json(value))
     return value
 
@@ -201,6 +319,17 @@ def _manifest(
 def _validate_manifest(
     value: Mapping[str, Any], repository: str, target: Mapping[str, str]
 ) -> None:
+    _validate_manifest_shape(value)
+    expected_target: dict[str, Any] = {"repository": repository, **target}
+    observed_target = value.get("target")
+    if not isinstance(observed_target, Mapping):
+        raise AdoptionError("adoption target binding is invalid")
+    expected_target["repository_id"] = observed_target.get("repository_id")
+    if dict(observed_target) != expected_target:
+        raise AdoptionError("adoption target binding is stale")
+
+
+def _validate_manifest_shape(value: Mapping[str, Any]) -> None:
     expected_keys = {
         "schema_version",
         "profile",
@@ -210,20 +339,18 @@ def _validate_manifest(
         "files",
         "bundle_sha256",
     }
+    if value.get("profile") == "python.sqlite.v1":
+        expected_keys.add("sqlite_policy_sha256")
     if set(value) != expected_keys:
         raise AdoptionError("adoption manifest fields are invalid")
     unsigned = dict(value)
     digest = unsigned.pop("bundle_sha256", None)
     if digest != sha256_bytes(_canonical_json(unsigned)):
         raise AdoptionError("adoption bundle digest mismatch")
-    expected_target: dict[str, Any] = {"repository": repository, **target}
-    observed_target = value.get("target")
-    if not isinstance(observed_target, Mapping):
-        raise AdoptionError("adoption target binding is invalid")
-    expected_target["repository_id"] = observed_target.get("repository_id")
-    if dict(observed_target) != expected_target:
-        raise AdoptionError("adoption target binding is stale")
-    if value.get("schema_version") != "1.0" or value.get("profile") != PROFILE_ID:
+    if (
+        value.get("schema_version") != "1.0"
+        or value.get("profile") not in PROFILE_ADAPTERS
+    ):
         raise AdoptionError("adoption manifest profile is invalid")
 
 
@@ -257,6 +384,7 @@ def _validate_config_against_manifest(
         config,
         governance_sha=str(governance.get("sha")),
         verifier_app_id=_positive_integer(verifier.get("app_id"), "verifier App id"),
+        profile=str(manifest.get("profile")),
     )
     standard = _mapping(config.get("standard"), "standard binding")
     expected = manifest["files"][STANDARD_PATH]["sha256"]
@@ -390,6 +518,7 @@ def _validate_bindings(
     governance_sha: str,
     verifier_app_id: int,
     rollback_sha: str,
+    profile: str,
 ) -> None:
     if not _REPOSITORY_RE.fullmatch(repository):
         raise AdoptionError("GitHub repository must use canonical owner/name")
@@ -397,6 +526,8 @@ def _validate_bindings(
     _positive_integer(verifier_app_id, "verifier App id")
     if not _SHA_RE.fullmatch(governance_sha) or not _SHA_RE.fullmatch(rollback_sha):
         raise AdoptionError("Governance pins must be exact lowercase 40-hex")
+    if profile not in PROFILE_ADAPTERS:
+        raise AdoptionError("adoption profile is unsupported")
 
 
 def _canonical_json(value: Any) -> bytes:
@@ -418,6 +549,9 @@ def _bundle_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verifier-app-id", required=True, type=int)
     parser.add_argument("--rollback-sha", required=True)
     parser.add_argument("--source-root", type=Path)
+    parser.add_argument(
+        "--profile", choices=tuple(PROFILE_ADAPTERS), default=PROFILE_ID
+    )
     return parser
 
 

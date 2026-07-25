@@ -5,16 +5,35 @@ import binascii
 import math
 from datetime import datetime
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import (
+    is_profile_runner,
+    profile_adapters,
+    runner_profile,
+)
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.docker_runtime import docker_run_argv, runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_packaged_named
+from governance_eval.sqlite_policy import (
+    ALLOWED_FUNCTIONS,
+    CERTIFIED_SQLITE_IDENTITY,
+    POLICY_ID,
+    POLICY_SHA256,
+)
+from governance_eval.sqlite_supportability import (
+    MAX_AST_NODES,
+    MAX_FILES,
+    MAX_FILE_BYTES,
+    MAX_SINKS,
+    MAX_SOURCE_BYTES,
+    MAX_STATEMENTS,
+    _limit_evidence,
+)
 
 _TIMING_TOLERANCE_SECONDS = 0.001
 
@@ -97,8 +116,8 @@ def _output_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
 def _runtime_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
     runtime = payload["runtime"]
     toolchain = (
-        "python.standard-profile.v1"
-        if plan.step["adapter_id"] == "python.standard-profile.v1"
+        plan.step["adapter_id"]
+        if is_profile_runner(plan.step["adapter_id"])
         else "ruff==0.15.21"
     )
     expected = {
@@ -214,7 +233,7 @@ def _outcome_error(payload: dict[str, Any]) -> str | None:
 
 def _profile_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None:
     capabilities = payload.get("capabilities")
-    is_profile = plan.step["adapter_id"] == "python.standard-profile.v1"
+    is_profile = is_profile_runner(plan.step["adapter_id"])
     if not is_profile:
         return (
             "execution result v2 unexpected profile capabilities"
@@ -229,11 +248,12 @@ def _profile_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None
         )
     if payload["termination"] != "EXITED":
         return "execution result v2 profile evidence has invalid termination"
+    expected_adapters = profile_adapters(runner_profile(plan.step["adapter_id"]))
     if not isinstance(capabilities, list) or len(capabilities) != len(
-        STANDARD_PROFILE_ADAPTERS
+        expected_adapters
     ):
         return "execution result v2 profile capability set is invalid"
-    for item, expected in zip(capabilities, STANDARD_PROFILE_ADAPTERS, strict=True):
+    for item, expected in zip(capabilities, expected_adapters, strict=True):
         capability, adapter_id, assurance = expected
         if (
             not isinstance(item, dict)
@@ -247,7 +267,213 @@ def _profile_error(payload: dict[str, Any], plan: ExecutionPlanV2) -> str | None
     all_passed = all(item["status"] == "PASS" for item in capabilities)
     if payload["capability_status"] == "PASS" and not all_passed:
         return "execution result v2 profile outcome is inconsistent"
+    if runner_profile(plan.step["adapter_id"]) == "python.sqlite.v1":
+        return _sqlite_evidence_error(capabilities[-1], capabilities)
     return None
+
+
+def _sqlite_evidence_error(
+    capability: dict[str, Any], capabilities: list[dict[str, Any]]
+) -> str | None:
+    evidence = capability.get("evidence")
+    if not isinstance(evidence, dict):
+        return "execution result v2 SQLite evidence is invalid"
+    try:
+        validate_packaged_named("sqlite_supportability_evidence", evidence)
+    except SchemaValidationError:
+        return "execution result v2 SQLite evidence schema is invalid"
+    if (
+        evidence.get("policy_id") != POLICY_ID
+        or evidence.get("policy_sha256") != POLICY_SHA256
+    ):
+        return "execution result v2 SQLite policy identity is invalid"
+    package = next(
+        (item for item in capabilities if item.get("capability") == "package_audit"),
+        {},
+    )
+    package_wheel = (
+        package.get("evidence", {}).get("wheel_sha256")
+        if isinstance(package.get("evidence"), dict)
+        else None
+    )
+    if evidence.get("wheel_sha256") != package_wheel:
+        return "execution result v2 SQLite wheel identity is invalid"
+    identity = evidence.get("sqlite_identity")
+    certified = (
+        {key: identity.get(key) for key in CERTIFIED_SQLITE_IDENTITY}
+        if isinstance(identity, dict)
+        else None
+    )
+    if capability.get("status") == "PASS" and _sqlite_pass_contradiction(
+        evidence, certified
+    ):
+        return "execution result v2 SQLite PASS evidence is contradictory"
+    return None
+
+
+def _sqlite_pass_contradiction(
+    evidence: dict[str, Any], certified: dict[str, Any] | None
+) -> bool:
+    files = evidence.get("files", [])
+    sinks = evidence.get("sinks", [])
+    provenance = evidence.get("receiver_provenance", [])
+    preparations = evidence.get("preparations", [])
+    counts = evidence.get("counts", {})
+    identity = evidence.get("sqlite_identity", {})
+    functions = identity.get("observed_functions", [])
+    return bool(
+        evidence.get("gate_implementation") != "PASS"
+        or evidence.get("repo_sql_supportability") != "PASS"
+        or evidence.get("sql_behavior_proof") != "PASS"
+        or evidence.get("errors") != []
+        or not _sha256(evidence.get("wheel_sha256"))
+        or certified != CERTIFIED_SQLITE_IDENTITY
+        or not files
+        or not sinks
+        or len(provenance) != len(sinks)
+        or not preparations
+        or _sqlite_preparation_contradiction(preparations)
+        or _sqlite_count_contradiction(counts, files, sinks, preparations)
+        or _sqlite_binding_contradiction(
+            files, sinks, provenance, preparations, evidence
+        )
+        or evidence.get("limits") != _limit_evidence()
+        or _sqlite_evidence_timing_contradiction(evidence)
+        or functions != sorted(set(functions))
+        or not set(functions).issubset(ALLOWED_FUNCTIONS)
+    )
+
+
+def _sqlite_preparation_contradiction(preparations: list[Any]) -> bool:
+    return any(
+        not isinstance(item, dict)
+        or item.get("status") != "PASS"
+        or item.get("error") is not None
+        for item in preparations
+    )
+
+
+def _sqlite_count_contradiction(
+    counts: dict[str, Any],
+    files: list[Any],
+    sinks: list[Any],
+    preparations: list[Any],
+) -> bool:
+    return bool(
+        counts.get("files") != len(files)
+        or counts.get("sinks") != len(sinks)
+        or counts.get("sql_statements") != len(preparations)
+        or counts.get("source_bytes")
+        != sum(item.get("bytes", -1) for item in files if isinstance(item, dict))
+        or not 1 <= counts.get("ast_nodes", -1) <= MAX_AST_NODES
+        or not 0 <= counts.get("files", -1) <= MAX_FILES
+        or not 0 <= counts.get("sinks", -1) <= MAX_SINKS
+        or not 1 <= counts.get("source_bytes", -1) <= MAX_SOURCE_BYTES
+        or not 0 <= counts.get("sql_statements", -1) <= MAX_STATEMENTS
+        or any(item.get("bytes", MAX_FILE_BYTES + 1) > MAX_FILE_BYTES for item in files)
+    )
+
+
+def _sqlite_binding_contradiction(
+    files: list[Any],
+    sinks: list[Any],
+    provenance: list[Any],
+    preparations: list[Any],
+    evidence: dict[str, Any],
+) -> bool:
+    file_paths = [item.get("path") for item in files if isinstance(item, dict)]
+    sink_keys = [_sink_key(item) for item in sinks]
+    preparation_keys = [_sink_key(item) for item in preparations]
+    preparation_identities = [_preparation_identity(item) for item in preparations]
+    sink_locations = [_location_key(item) for item in sinks]
+    provenance_locations = [_location_key(item) for item in provenance]
+    resources = evidence.get("resources", [])
+    return bool(
+        len(file_paths) != len(files)
+        or len(file_paths) != len(set(file_paths))
+        or len(file_paths) != len({str(path).casefold() for path in file_paths})
+        or any(not _safe_path(path) for path in file_paths)
+        or len(sink_keys) != len(set(sink_keys))
+        or None in sink_keys
+        or len(provenance_locations) != len(set(provenance_locations))
+        or None in provenance_locations
+        or set(sink_locations) != set(provenance_locations)
+        or set(preparation_keys) != set(sink_keys)
+        or None in preparation_identities
+        or len(preparation_identities) != len(set(preparation_identities))
+        or any(key[0] not in file_paths for key in sink_keys if key)
+        or len(resources) != len(set(resources))
+        or any(not _safe_path(path) for path in resources)
+        or any(path not in file_paths for path in resources)
+    )
+
+
+def _sink_key(item: Any) -> tuple[str, int, str] | None:
+    if not isinstance(item, dict):
+        return None
+    path, line, sink = item.get("path"), item.get("line"), item.get("sink")
+    if (
+        not isinstance(path, str)
+        or not isinstance(line, int)
+        or not isinstance(sink, str)
+    ):
+        return None
+    return path, line, sink
+
+
+def _location_key(item: Any) -> tuple[str, int] | None:
+    if not isinstance(item, dict):
+        return None
+    path, line = item.get("path"), item.get("line")
+    if not isinstance(path, str) or not isinstance(line, int):
+        return None
+    return path, line
+
+
+def _preparation_identity(
+    item: Any,
+) -> tuple[str, int, str, str | None, str] | None:
+    if not isinstance(item, dict):
+        return None
+    path = item.get("path")
+    line = item.get("line")
+    sink = item.get("sink")
+    selector = item.get("selector")
+    digest = item.get("sql_sha256")
+    if (
+        not isinstance(path, str)
+        or not isinstance(line, int)
+        or not isinstance(sink, str)
+        or selector is not None
+        and not isinstance(selector, str)
+        or not isinstance(digest, str)
+    ):
+        return None
+    return path, line, sink, selector, digest
+
+
+def _safe_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value or "\\" in value:
+        return False
+    path = PurePosixPath(value)
+    return not path.is_absolute() and ".." not in path.parts
+
+
+def _sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _sqlite_evidence_timing_contradiction(evidence: dict[str, Any]) -> bool:
+    try:
+        started = _timestamp(evidence["started_at"])
+        completed = _timestamp(evidence["completed_at"])
+    except (KeyError, TypeError, ValueError):
+        return True
+    return completed < started or (completed - started).total_seconds() > 120
 
 
 def _timing_error(payload: dict[str, Any], timeout_seconds: int) -> str | None:

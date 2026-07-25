@@ -13,6 +13,7 @@ from governance_eval.adoption import (
     prove_adoption_bundle,
     validate_adoption_config,
 )
+from governance_eval.sqlite_policy import POLICY_SHA256
 
 
 class AdoptionTests(unittest.TestCase):
@@ -120,6 +121,75 @@ class AdoptionTests(unittest.TestCase):
                             governance_sha=self.governance_sha,
                             verifier_app_id=456,
                         )
+
+    def test_sqlite_profile_requires_discovery_and_binds_eleven_capabilities(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            self._target(target)
+            package = target / "src/package"
+            package.mkdir(parents=True)
+            (package / "database.py").write_text(
+                "import sqlite3\n"
+                "def query(connection: sqlite3.Connection) -> None:\n"
+                "    connection.execute('SELECT coalesce(NULL, 1)')\n",
+                encoding="utf-8",
+            )
+            (target / "pyproject.toml").write_text(
+                '[project]\nname = "fixture"\nversion = "0.0.1"\n'
+                '[tool.setuptools.packages.find]\nwhere = ["src"]\n',
+                encoding="utf-8",
+            )
+            subprocess.run(["git", "add", "."], cwd=target, check=True, timeout=10)
+            subprocess.run(
+                ["git", "commit", "-qm", "sqlite fixture"],
+                cwd=target,
+                check=True,
+                timeout=10,
+            )
+
+            with self.assertRaisesRegex(AdoptionError, "trusted opt-in"):
+                generate_adoption_bundle(
+                    repo_root=target,
+                    output_dir=root / "standard",
+                    github_repository="owner/repository",
+                    repository_id=123,
+                    governance_sha=self.governance_sha,
+                    verifier_app_id=456,
+                    rollback_sha=self.rollback_sha,
+                    source_root=self.source,
+                )
+
+            bundle = root / "sqlite"
+            manifest = generate_adoption_bundle(
+                repo_root=target,
+                output_dir=bundle,
+                github_repository="owner/repository",
+                repository_id=123,
+                governance_sha=self.governance_sha,
+                verifier_app_id=456,
+                rollback_sha=self.rollback_sha,
+                source_root=self.source,
+                profile="python.sqlite.v1",
+            )
+            proof = prove_adoption_bundle(
+                repo_root=target,
+                bundle_dir=bundle,
+                artifacts_dir=root / "proof",
+                github_repository="owner/repository",
+            )
+            config = json.loads((bundle / CONFIG_PATH).read_text(encoding="utf-8"))
+
+            self.assertEqual(manifest["profile"], "python.sqlite.v1")
+            self.assertEqual(manifest["sqlite_policy_sha256"], POLICY_SHA256)
+            self.assertEqual(config["profile"], "python.sqlite.v1")
+            self.assertEqual(config["adapters"][-1]["capability"], "sql_supportability")
+            self.assertEqual(len(proof["capabilities"]), 11)
+            self.assertEqual(
+                proof["profile_discovery"]["required_profile"], "python.sqlite.v1"
+            )
 
     def _target(self, path: Path) -> None:
         path.mkdir()

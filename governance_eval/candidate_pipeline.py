@@ -7,15 +7,29 @@ import shutil
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from governance_eval.adoption import AdoptionError, validate_adoption_config
+from governance_eval.adoption import (
+    CONFIG_PATH,
+    MANIFEST_PATH,
+    STANDARD_PATH,
+    WORKFLOW_PATH,
+    AdoptionError,
+    validate_adoption_config,
+    validate_adoption_manifest,
+)
 from governance_eval.candidate_bundle import (
     build_candidate_bundle,
     write_candidate_bundle,
 )
 from governance_eval.checkout_receipt import bind_checkout
+from governance_eval.capability_catalog import profile_runner
 from governance_eval.docker_runtime import execute_ruff_docker
 from governance_eval.execution_plan_v2 import compile_execution_plan_v2
 from governance_eval.hashing import sha256_file
+from governance_eval.sqlite_supportability import (
+    SQLiteSupportabilityError,
+    discover_repository_profile,
+    validate_profile_discovery,
+)
 
 
 GOVERNANCE_REPOSITORY = "markheck-solutions/governance"
@@ -51,7 +65,41 @@ def run_candidate_pipeline(
     workflow_file = _inside(target, target / workflow_path, "workflow")
     config_file = _inside(target, config_path, "configuration")
     standard_file = _inside(target, standard_path, "standard")
-    _validate_configuration(config_file, standard_file, evaluator_sha)
+    manifest_file = _inside(target, target / MANIFEST_PATH, "adoption manifest")
+    profile = _validate_configuration(config_file, standard_file, evaluator_sha)
+    discovery = discover_repository_profile(target)
+    try:
+        validate_profile_discovery(discovery, selected_profile=profile)
+    except SQLiteSupportabilityError as exc:
+        raise CandidatePipelineError(str(exc)) from exc
+    adoption_manifest = _load_json(manifest_file, "adoption manifest")
+    repository_id = repository.get("id")
+    repository_name = repository.get("full_name")
+    if (
+        not isinstance(repository_id, int)
+        or isinstance(repository_id, bool)
+        or repository_id < 1
+        or not isinstance(repository_name, str)
+    ):
+        raise CandidatePipelineError("repository identity is invalid")
+    verifier = _mapping(
+        _load_json(config_file, "adoption configuration").get("verifier"),
+        "verifier configuration",
+    )
+    app_id = verifier.get("app_id")
+    assert isinstance(app_id, int) and not isinstance(app_id, bool)
+    try:
+        validate_adoption_manifest(
+            adoption_manifest,
+            repository=repository_name,
+            repository_id=repository_id,
+            governance_sha=evaluator_sha,
+            verifier_app_id=app_id,
+            profile=profile,
+        )
+    except AdoptionError as exc:
+        raise CandidatePipelineError(str(exc)) from exc
+    _validate_manifest_files(adoption_manifest, target)
     receipt = bind_checkout(
         target_root=target,
         evaluator_root=evaluator,
@@ -80,10 +128,9 @@ def run_candidate_pipeline(
             "docker_host": os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock"),
         },
     )
+    capability, adapter_id = profile_runner(profile)
     plan = compile_execution_plan_v2(
-        receipt,
-        capability="standard_profile",
-        adapter_id="python.standard-profile.v1",
+        receipt, capability=capability, adapter_id=adapter_id
     )
     result = execute_ruff_docker(
         plan=plan,
@@ -101,6 +148,9 @@ def run_candidate_pipeline(
         workflow_file_sha256=sha256_file(workflow_file),
         event_name="pull_request",
         ai_review={"status": "AI_REVIEW_UNAVAILABLE", "findings": []},
+        profile=profile,
+        profile_discovery=discovery,
+        adoption_manifest_sha256=sha256_file(manifest_file),
     )
     write_candidate_bundle(output_dir, payloads, target_root=target)
     return json.loads(payloads["candidate-bundle.json"])
@@ -120,7 +170,7 @@ def _load_event(path: Path) -> Mapping[str, Any]:
 
 def _validate_configuration(
     config_path: Path, standard_path: Path, evaluator_sha: str
-) -> None:
+) -> str:
     config = _load_json(config_path, "adoption configuration")
     verifier = _mapping(config.get("verifier"), "verifier configuration")
     app_id = verifier.get("app_id")
@@ -135,6 +185,29 @@ def _validate_configuration(
     standard = _mapping(config.get("standard"), "standard configuration")
     if standard.get("sha256") != sha256_file(standard_path):
         raise CandidatePipelineError("adoption standard hash mismatch")
+    profile = config.get("profile")
+    if not isinstance(profile, str):
+        raise CandidatePipelineError("adoption profile is invalid")
+    return profile
+
+
+def _validate_manifest_files(manifest: Mapping[str, Any], target: Path) -> None:
+    files = _mapping(manifest.get("files"), "adoption manifest files")
+    expected = {
+        CONFIG_PATH: target / CONFIG_PATH,
+        STANDARD_PATH: target / STANDARD_PATH,
+        WORKFLOW_PATH: target / WORKFLOW_PATH,
+    }
+    if set(files) != set(expected):
+        raise CandidatePipelineError("adoption manifest file set is invalid")
+    for name, path in expected.items():
+        file_path = _inside(target, path, f"adoption file {name}")
+        receipt = _mapping(files[name], f"adoption file receipt {name}")
+        if receipt != {
+            "bytes": file_path.stat().st_size,
+            "sha256": sha256_file(file_path),
+        }:
+            raise CandidatePipelineError("adoption manifest file binding mismatch")
 
 
 def _load_json(path: Path, label: str) -> Mapping[str, Any]:

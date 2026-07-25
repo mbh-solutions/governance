@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -17,7 +18,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from governance_eval.checkout_receipt import CheckoutReceipt
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import (
+    is_profile_runner,
+    profile_adapters,
+    runner_profile,
+)
 from governance_eval.execution_plan_v2 import (
     ExecutionPlanV2,
     _RUFF_SHA256,
@@ -29,6 +34,7 @@ _DOCKER_HOSTS = {
     "unix:///var/run/docker.sock",
     "npipe:////./pipe/docker_engine",
 }
+MAX_EVIDENCE_BYTES = 64 * 1024 * 1024
 
 
 class DockerRuntimeError(RuntimeError):
@@ -65,7 +71,7 @@ def docker_run_argv(
         "--env=PYTHONNOUSERSITE=1",
         "--env=PYTHONDONTWRITEBYTECODE=1",
     ]
-    if step["adapter_id"] == "python.standard-profile.v1":
+    if is_profile_runner(step["adapter_id"]):
         command.append("--env=PYTHONPATH=/opt/governance-toolchain/site-packages")
     return [
         *command,
@@ -141,8 +147,8 @@ def execute_ruff_docker(
             output_limit=plan.step["output_limit_bytes"],
         )
         errors.extend(outcome["errors"])
-        profile = _profile_payload(plan, outcome)
-        if plan.step["adapter_id"] == "python.standard-profile.v1" and profile is None:
+        profile = _profile_payload(plan, outcome, workspace)
+        if is_profile_runner(plan.step["adapter_id"]) and profile is None:
             errors.append("standard profile evidence is missing or malformed")
     except (DockerRuntimeError, OSError, subprocess.SubprocessError) as exc:
         errors.append(str(exc))
@@ -250,7 +256,7 @@ def _seal_toolchain(
     plan: ExecutionPlanV2,
     evaluator_root: Path,
 ) -> None:
-    if plan.step["adapter_id"] == "python.standard-profile.v1":
+    if is_profile_runner(plan.step["adapter_id"]):
         _seal_profile_toolchain(source, destination, plan, evaluator_root)
         return
     source = source.resolve()
@@ -377,11 +383,15 @@ def _reject_links(root: Path) -> None:
 
 
 def _profile_payload(
-    plan: ExecutionPlanV2, outcome: dict[str, Any]
+    plan: ExecutionPlanV2,
+    outcome: dict[str, Any],
+    workspace: Path | None = None,
 ) -> list[dict[str, Any]] | None:
-    if plan.step["adapter_id"] != "python.standard-profile.v1":
+    if not is_profile_runner(plan.step["adapter_id"]):
         return None
-    payload = _decode_profile_payload(outcome["stdout"])
+    profile_id = runner_profile(plan.step["adapter_id"])
+    expected_adapters = profile_adapters(profile_id)
+    payload = _decode_profile_payload(outcome["stdout"], profile_id, workspace)
     if payload is None or set(payload) != {
         "schema_version",
         "profile",
@@ -391,12 +401,12 @@ def _profile_payload(
         return None
     capabilities = payload["capabilities"]
     if not isinstance(capabilities, list) or len(capabilities) != len(
-        STANDARD_PROFILE_ADAPTERS
+        expected_adapters
     ):
         return None
     if not all(
         _valid_profile_capability(item, expected)
-        for item, expected in zip(capabilities, STANDARD_PROFILE_ADAPTERS, strict=True)
+        for item, expected in zip(capabilities, expected_adapters, strict=True)
     ):
         return None
     expected_status = (
@@ -406,30 +416,108 @@ def _profile_payload(
     )
     if (
         payload["schema_version"] != "1.0"
-        or payload["profile"] != "python.standard.v1"
+        or payload["profile"] != profile_id
         or payload["status"] != expected_status
     ):
         return None
     return capabilities
 
 
-def _decode_profile_payload(stream: dict[str, Any]) -> dict[str, Any] | None:
+def _decode_profile_payload(
+    stream: dict[str, Any],
+    profile: str = "python.standard.v1",
+    workspace: Path | None = None,
+) -> dict[str, Any] | None:
     if stream["truncated"]:
         return None
     try:
         raw = base64.b64decode(stream["captured_base64"], validate=True)
         text = raw.decode("utf-8")
         lines = text.splitlines()
-        if len(lines) != 1 or not lines[0].startswith(
-            "__GOVERNANCE_STANDARD_PROFILE_V1__"
-        ):
-            return None
-        payload = json.loads(
-            lines[0].removeprefix("__GOVERNANCE_STANDARD_PROFILE_V1__")
+        marker = (
+            "__GOVERNANCE_SQLITE_PROFILE_V1__"
+            if profile == "python.sqlite.v1"
+            else "__GOVERNANCE_STANDARD_PROFILE_V1__"
         )
+        if len(lines) != 1 or not lines[0].startswith(marker):
+            return None
+        payload = json.loads(lines[0].removeprefix(marker))
     except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, TypeError):
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if profile == "python.sqlite.v1":
+        return _load_sqlite_profile(payload, workspace)
+    return payload
+
+
+def _load_sqlite_profile(
+    compact: dict[str, Any], workspace: Path | None
+) -> dict[str, Any] | None:
+    if workspace is None or set(compact) != {
+        "schema_version",
+        "profile",
+        "status",
+        "capabilities_path",
+        "capabilities_sha256",
+    }:
+        return None
+    if compact.get("capabilities_path") != ".governance-output/sqlite-profile.json":
+        return None
+    path = workspace / ".governance-output/sqlite-profile.json"
+    try:
+        raw = _read_regular_file(path, MAX_EVIDENCE_BYTES)
+        if raw is None:
+            return None
+        if sha256(raw).hexdigest() != compact.get("capabilities_sha256"):
+            return None
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if any(
+        payload.get(key) != compact.get(key)
+        for key in ("schema_version", "profile", "status")
+    ):
+        return None
+    return payload
+
+
+def _read_regular_file(path: Path, limit: int) -> bytes | None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
+            return None
+        chunks: list[bytes] = []
+        remaining = opened.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                return None
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        closed = os.fstat(descriptor)
+        if os.read(descriptor, 1) or _file_identity(closed) != _file_identity(opened):
+            return None
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+        value.st_ctime_ns,
+    )
 
 
 def _valid_profile_capability(item: Any, expected: tuple[str, str, str]) -> bool:
@@ -689,7 +777,7 @@ def _result(
         and outcome["exit_code"] == 0
         and not errors
         and (
-            plan.step["adapter_id"] != "python.standard-profile.v1"
+            not is_profile_runner(plan.step["adapter_id"])
             or profile is not None
             and all(item["status"] == "PASS" for item in profile)
         )
@@ -700,8 +788,8 @@ def _result(
             "docker_path": plan.runtime["docker_path"],
             "docker_sha256": plan.runtime["docker_sha256"],
             "toolchain": (
-                "python.standard-profile.v1"
-                if plan.step["adapter_id"] == "python.standard-profile.v1"
+                plan.step["adapter_id"]
+                if is_profile_runner(plan.step["adapter_id"])
                 else "ruff==0.15.21"
             ),
             "toolchain_sha256": plan.runtime["toolchain_sha256"],

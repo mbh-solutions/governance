@@ -1,0 +1,79 @@
+{
+  "blocking_decision": {
+    "reasons": [
+      "DETERMINISTIC_CAPABILITY_FAILED"
+    ],
+    "status": "BLOCK_TECHNICAL"
+  },
+  "blocking_decision_sha256": "ac117fc975bc1d4c783f969a89cbe5472c372a3fc47c188af62f9149223803c7",
+  "canonical_profile_payload": "__GOVERNANCE_STANDARD_PROFILE_V1__{\"capabilities\":[{\"adapter_id\":\"python.ruff-check.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"lint\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.ruff-format-check.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"format\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.mypy.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"typecheck\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.ruff-c901.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"complexity\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.architecture.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"architecture\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.unittest.v1\",\"assurance_class\":\"COOPERATIVE_DYNAMIC\",\"capability\":\"tests\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.wheel-build.v1\",\"assurance_class\":\"CONTAINED_BUILD\",\"capability\":\"build\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"python.package-audit.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"package_audit\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"governance.phase1.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"benchmark\",\"evidence\":{},\"status\":\"PASS\"},{\"adapter_id\":\"git.diff-integrity.v1\",\"assurance_class\":\"EVALUATOR_AUTHORITATIVE\",\"capability\":\"integrity\",\"evidence\":{},\"status\":\"PASS\"}],\"profile\":\"python.standard.v1\",\"schema_version\":\"1.0\",\"status\":\"PASS\"}\n",
+  "canonical_profile_payload_sha256": "a510f02e0bea7d7abf37b16f81c172e75cf0d8312689df6cdf0662b7f464b3de",
+  "pass_decision": {
+    "reasons": [],
+    "status": "PASS"
+  },
+  "pass_decision_sha256": "64a8d5b4f2b15f3c42fe29496a9e84a5ca20fdc97a3df620f50aff71900b2c24",
+  "profile_marker": "__GOVERNANCE_STANDARD_PROFILE_V1__",
+  "rollback_sha": "c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86",
+  "runner": {
+    "adapter_id": "python.standard-profile.v1",
+    "arguments": [
+      "-P",
+      "-s",
+      "-m",
+      "governance_eval.standard_profile",
+      "--workspace",
+      "/workspace",
+      "--benchmark-root",
+      "/opt/governance-toolchain/benchmark"
+    ],
+    "assurance_class": "COOPERATIVE_DYNAMIC",
+    "capability": "standard_profile",
+    "module": "governance_eval.standard_profile",
+    "output_limit_bytes": 65536,
+    "runtime_id": "evaluator.python-isolated.v1",
+    "timeout_seconds": 300,
+    "working_directory": "/workspace"
+  },
+  "runner_sha256": "78bb4cd1ca476cccb107dda52ce65377fb238fc975d5d91b3ab8c67e580eaa34",
+  "standard_plan_step": {
+    "adapter_id": "python.standard-profile.v1",
+    "argv": [
+      "python",
+      "-P",
+      "-s",
+      "-m",
+      "governance_eval.standard_profile",
+      "--workspace",
+      "/workspace",
+      "--benchmark-root",
+      "/opt/governance-toolchain/benchmark",
+      "--evaluator-sha",
+      "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    ],
+    "output_limit_bytes": 65536,
+    "step_id": "standard_profile",
+    "timeout_seconds": 300,
+    "toolchain": {
+      "governance-eval": "0.1.0",
+      "mypy": "2.2.0",
+      "ruff": "0.15.21",
+      "setuptools": "83.0.0"
+    },
+    "working_directory": "/workspace"
+  },
+  "standard_plan_step_sha256": "0241c3aa6dd1158e489677af77daac1148e3fa6397367737e54e888bf1b154c0",
+  "standard_profile_adapters": [
+    ["lint", "python.ruff-check.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["format", "python.ruff-format-check.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["typecheck", "python.mypy.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["complexity", "python.ruff-c901.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["architecture", "python.architecture.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["tests", "python.unittest.v1", "COOPERATIVE_DYNAMIC"],
+    ["build", "python.wheel-build.v1", "CONTAINED_BUILD"],
+    ["package_audit", "python.package-audit.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["benchmark", "governance.phase1.v1", "EVALUATOR_AUTHORITATIVE"],
+    ["integrity", "git.diff-integrity.v1", "EVALUATOR_AUTHORITATIVE"]
+  ],
+  "standard_profile_adapters_sha256": "ee4ca94d0c7097ddf691d17afbd0ee84379eac36885019f9634c9788447b8dec"
+}

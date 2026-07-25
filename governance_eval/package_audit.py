@@ -420,26 +420,43 @@ def audit_wheel(repo_root: Path, wheel_path: Path) -> tuple[dict[str, Any], list
 def audit_candidate_wheel(
     repo_root: Path, wheel_path: Path
 ) -> tuple[dict[str, Any], list[str]]:
-    evidence: dict[str, Any] = {
-        "name": wheel_path.name,
-        "sha256": sha256_file(wheel_path) if wheel_path.is_file() else None,
-        "member_count": 0,
-        "uncompressed_bytes": 0,
-        "members": [],
-        "metadata": None,
-    }
     if not wheel_path.is_file() or wheel_path.is_symlink():
-        return evidence, ["wheel archive missing or linked"]
-    if wheel_path.stat().st_size > MAX_ARCHIVE_BYTES:
+        return _candidate_evidence(wheel_path.name, None), [
+            "wheel archive missing or linked"
+        ]
+    try:
+        raw = wheel_path.read_bytes()
+    except OSError:
+        return _candidate_evidence(wheel_path.name, None), ["wheel archive unreadable"]
+    return audit_candidate_wheel_bytes(repo_root, wheel_path.name, raw)
+
+
+def audit_candidate_wheel_bytes(
+    repo_root: Path, wheel_name: str, raw: bytes
+) -> tuple[dict[str, Any], list[str]]:
+    evidence = _candidate_evidence(wheel_name, hashlib.sha256(raw).hexdigest())
+    if len(raw) > MAX_ARCHIVE_BYTES:
         return evidence, [f"wheel archive size exceeds {MAX_ARCHIVE_BYTES}"]
     try:
         project = tomllib.loads(
             (repo_root / "pyproject.toml").read_text(encoding="utf-8")
         )["project"]
-        with zipfile.ZipFile(wheel_path) as archive:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             return _audit_candidate_archive(archive, project, evidence)
     except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
         return evidence, [f"wheel archive malformed: {type(exc).__name__}"]
+
+
+def _candidate_evidence(name: str, digest: str | None) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "name": name,
+        "sha256": digest,
+        "member_count": 0,
+        "uncompressed_bytes": 0,
+        "members": [],
+        "metadata": None,
+    }
+    return evidence
 
 
 def _audit_candidate_archive(
