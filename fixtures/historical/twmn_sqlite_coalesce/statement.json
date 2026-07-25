@@ -1,0 +1,11 @@
+{
+  "schema_version": "twmn_sqlite_policy_fixture.v1",
+  "repository": "markheck-solutions/twmn",
+  "commit_sha": "47bf8823000ac98595ccb1013d3f8f6abdf90ebd",
+  "tree_sha": "45b985ed6944cf9cc48ffe56e9954df5060b2a6a",
+  "path": "src/twmn_corpus/database.py",
+  "source_sha256": "bf8197920fe4821b7f8dc00e994db8f737c73863f40ecbaaa34069286a9cd66b",
+  "selector": "_UPSERT_SQL.products",
+  "normalized_sql_sha256": "b0fec4a3f96292385d61ba50c12dc59d25abdb3d525f3ffff2d9dc531c00493e",
+  "statement": "INSERT INTO products(id, title, source_url) VALUES (?, ?, ?)\n        ON CONFLICT(id) DO UPDATE SET\n            title = excluded.title,\n            source_url = COALESCE(excluded.source_url, products.source_url)"
+}

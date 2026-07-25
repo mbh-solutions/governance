@@ -101,7 +101,7 @@ the same policy hash in plans, results, manifests, and enrollment evidence.
 | Required compile option | `ENABLE_FTS5` |
 | Executed schema statements | `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE TRIGGER`, `CREATE VIRTUAL TABLE ... USING fts5` |
 | Candidate PRAGMA allowlist | `foreign_keys`, `foreign_key_check`, `quick_check` |
-| SQL function allowlist | `bm25`, `highlight`, `like`, `match`, `snippet` |
+| SQL function allowlist | `bm25`, `coalesce`, `highlight`, `like`, `match`, `snippet` |
 | Virtual-table module allowlist | `fts5` |
 | Always denied | `ATTACH`, `DETACH`, `VACUUM`, file-backed databases, `load_extension`, writable schema, every unlisted PRAGMA/function/module, filesystem escape |
 | Progress bound | `10,000,000` virtual-machine operations and `2` seconds per statement |
