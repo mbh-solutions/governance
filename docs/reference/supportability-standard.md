@@ -485,8 +485,9 @@ writable-schema operations, non-allowlisted PRAGMAs/functions, and contradictory
 evidence fail closed.
 
 `sqlite-policy.v1` permits candidate PRAGMAs only `foreign_keys`,
-`foreign_key_check`, and `quick_check`; functions only `bm25`, `highlight`,
-`like`, `match`, and `snippet`; and virtual-table module only `fts5`. It requires
+`foreign_key_check`, and `quick_check`; functions only `bm25`, `coalesce`,
+`highlight`, `like`, `match`, and `snippet`; and virtual-table module only
+`fts5`. It requires
 SQLite `>=3.40.0,<4.0.0` with `ENABLE_FTS5`, binds the exact certified SQLite
 version plus compile-option digest, and binds the canonical policy SHA-256 in
 plans, results, manifests, and verifier enrollment. The exact `setlimit`,
