@@ -31,7 +31,10 @@
           "configuration_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "standard_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
           "required_context": {"const": "Governance / Authoritative Decision"},
-          "verifier_app_id": {"type": "integer", "minimum": 1}
+          "verifier_app_id": {"type": "integer", "minimum": 1},
+          "profile": {"type": "string", "enum": ["python.standard.v1", "python.sqlite.v1"]},
+          "adoption_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "sqlite_policy_sha256": {"type": "string", "enum": ["bea474dc23b2b6e99e5ea48089ae8edd753910c8aeefbd946625fd05bb950fce"]}
         }
       }
     }

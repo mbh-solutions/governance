@@ -16,18 +16,26 @@ from governance_eval.candidate_bundle import (
     artifact_name,
     recompute_decision,
 )
-from governance_eval.capability_catalog import get_capability_adapter
+from governance_eval.capability_catalog import (
+    PROFILE_ADAPTERS,
+    get_capability_adapter,
+    is_profile_runner,
+    runner_profile,
+)
 from governance_eval.checkout_receipt import CheckoutReceipt
+from governance_eval.docker_runtime import MAX_EVIDENCE_BYTES
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
+from governance_eval.sqlite_supportability import validate_profile_discovery
+from governance_eval.sqlite_policy import POLICY_SHA256
 
 
 VERIFIER_SCHEMA_VERSION = "governance_verifier_receipt.v1"
 REQUIRED_CONTEXT = "Governance / Authoritative Decision"
 GITHUB_ACTIONS_APP_ID = 15368
-MAX_ARCHIVE_BYTES = 16 * 1024 * 1024
-MAX_ENTRY_BYTES = 4 * 1024 * 1024
-MAX_TOTAL_BYTES = 16 * 1024 * 1024
+MAX_ARCHIVE_BYTES = MAX_EVIDENCE_BYTES
+MAX_ENTRY_BYTES = MAX_EVIDENCE_BYTES
+MAX_TOTAL_BYTES = MAX_EVIDENCE_BYTES
 MAX_COMPRESSION_RATIO = 100
 
 
@@ -65,6 +73,9 @@ class VerifierContext:
     artifact_created_at: str
     verified_at: str
     verifier_app_id: int
+    profile: str = "python.standard.v1"
+    adoption_manifest_sha256: str = ""
+    sqlite_policy_sha256: str = ""
     max_age_seconds: int = 3600
 
 
@@ -272,6 +283,22 @@ def _verify_context(
     }
     if dict(adapter) != expected_adapter:
         raise ArtifactVerificationError("adapter assurance identity mismatch")
+    discovery = manifest.get("profile_discovery")
+    if not isinstance(discovery, Mapping):
+        raise ArtifactVerificationError("profile discovery receipt is missing")
+    validate_profile_discovery(discovery, selected_profile=context.profile)
+    if (
+        is_profile_runner(plan.step["adapter_id"])
+        and runner_profile(plan.step["adapter_id"]) != context.profile
+    ):
+        raise ArtifactVerificationError("execution profile selection mismatch")
+    if (
+        not is_profile_runner(plan.step["adapter_id"])
+        and context.profile != "python.standard.v1"
+    ):
+        raise ArtifactVerificationError(
+            "SQLite evidence lacks the typed profile runner"
+        )
     _verify_freshness(manifest, context)
 
 
@@ -338,6 +365,17 @@ def _manifest_pairs(
             context.configuration_sha256,
         ),
         ("standard", manifest.get("standard_sha256"), context.standard_sha256),
+        ("profile", manifest.get("profile"), context.profile),
+        (
+            "adoption manifest",
+            manifest.get("adoption_manifest_sha256"),
+            context.adoption_manifest_sha256,
+        ),
+        (
+            "SQLite policy",
+            manifest.get("sqlite_policy_sha256"),
+            context.sqlite_policy_sha256 or None,
+        ),
     ]
 
 
@@ -353,6 +391,20 @@ def _verify_run_context(context: VerifierContext) -> None:
         raise ArtifactVerificationError("artifact name is not run-attempt bound")
     if context.verifier_app_id < 1:
         raise ArtifactVerificationError("verifier App identity is invalid")
+    if context.profile not in PROFILE_ADAPTERS:
+        raise ArtifactVerificationError("verifier profile is unsupported")
+    if len(context.adoption_manifest_sha256) != 64 or any(
+        character not in "0123456789abcdef"
+        for character in context.adoption_manifest_sha256
+    ):
+        raise ArtifactVerificationError("adoption manifest identity is invalid")
+    if context.profile == "python.sqlite.v1" and (
+        context.sqlite_policy_sha256 != POLICY_SHA256
+        or context.sqlite_policy_sha256 != context.sqlite_policy_sha256.lower()
+    ):
+        raise ArtifactVerificationError("SQLite policy identity is invalid")
+    if context.profile != "python.sqlite.v1" and context.sqlite_policy_sha256:
+        raise ArtifactVerificationError("unexpected SQLite policy identity")
 
 
 def _verify_freshness(manifest: Mapping[str, Any], context: VerifierContext) -> None:
@@ -388,6 +440,9 @@ def _verifier_receipt(
             "archive_sha256": archive_sha256,
         },
         "verifier_app_id": context.verifier_app_id,
+        "profile": context.profile,
+        "adoption_manifest_sha256": context.adoption_manifest_sha256,
+        "sqlite_policy_sha256": context.sqlite_policy_sha256 or None,
         "verified_at": context.verified_at,
         "errors": errors,
         "check": {

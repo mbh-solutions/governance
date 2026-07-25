@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -16,20 +17,36 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from governance_eval.benchmark import BENCHMARK_PASS, run_benchmark
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import profile_adapters
 from governance_eval.docker_runtime import _BoundedOutput
 from governance_eval.hashing import sha256_file
-from governance_eval.package_audit import audit_candidate_wheel
+from governance_eval.package_audit import MAX_ARCHIVE_BYTES, audit_candidate_wheel_bytes
+from governance_eval.sqlite_supportability import (
+    SQLITE_PROFILE,
+    STANDARD_PROFILE,
+    SQLiteSupportabilityError,
+    discover_wheel_profile,
+    packaged_source_snapshot,
+    run_sqlite_supportability,
+    validate_profile_discovery,
+    wheel_source_binding_errors_from_snapshot,
+)
 
 
 PROFILE_MARKER = "__GOVERNANCE_STANDARD_PROFILE_V1__"
+SQLITE_PROFILE_MARKER = "__GOVERNANCE_SQLITE_PROFILE_V1__"
 OUTPUT_LIMIT = 65536
 COMMAND_TIMEOUT = 120
+SQLITE_ADAPTER_TIMEOUT = 120
 _OUTPUT_DIR = ".governance-output"
+_SQLITE_PROFILE_FILE = "sqlite-profile.json"
 
 
 def run_standard_profile(
-    workspace: Path, benchmark_root: Path, evaluator_sha: str
+    workspace: Path,
+    benchmark_root: Path,
+    evaluator_sha: str,
+    profile: str = STANDARD_PROFILE,
 ) -> dict[str, Any]:
     root = workspace.resolve(strict=True)
     benchmark = benchmark_root.resolve(strict=True)
@@ -41,7 +58,16 @@ def run_standard_profile(
         character not in "0123456789abcdef" for character in evaluator_sha
     ):
         raise ValueError("standard profile evaluator SHA is invalid")
+    if profile not in {STANDARD_PROFILE, SQLITE_PROFILE}:
+        raise ValueError("Python Governance profile is unsupported")
     initial = _source_snapshot(root)
+    package_sources: dict[str, bytes] | None = None
+    package_source_errors: list[str] = []
+    if profile == SQLITE_PROFILE:
+        try:
+            package_sources = packaged_source_snapshot(root)
+        except (OSError, SQLiteSupportabilityError, UnicodeError, ValueError) as exc:
+            package_source_errors.append(str(exc))
     python_files = sorted(
         path.relative_to(root).as_posix()
         for path in root.rglob("*.py")
@@ -56,10 +82,27 @@ def run_standard_profile(
     results.append(_architecture_result(root, python_files))
     results.append(_run_capability(root, *commands[4]))
     results.append(_run_capability(root, *commands[5]))
-    results.append(_package_result(root, output, results[-1]))
+    wheel = _wheel_snapshot(output, results[-1])
+    package_result = _package_result(root, wheel, results[-1])
+    if wheel is not None and package_result["status"] == "PASS":
+        _apply_wheel_closure(
+            profile,
+            wheel[1],
+            package_result,
+            package_sources,
+            package_source_errors,
+        )
+    results.append(package_result)
     results.append(_benchmark_result(benchmark, output, evaluator_sha))
     results.append(_integrity_result(root, initial))
-    expected = [item[0] for item in STANDARD_PROFILE_ADAPTERS]
+    if profile == SQLITE_PROFILE:
+        results.append(
+            _run_sqlite_bounded(
+                wheel[0] if wheel else None,
+                wheel[1] if wheel and package_result["status"] == "PASS" else None,
+            )
+        )
+    expected = [item[0] for item in profile_adapters(profile)]
     if [item["capability"] for item in results] != expected:
         raise ValueError("standard profile capability order is invalid")
     status = (
@@ -70,7 +113,7 @@ def run_standard_profile(
     _release_workspace_directories(root)
     return {
         "schema_version": "1.0",
-        "profile": "python.standard.v1",
+        "profile": profile,
         "status": status,
         "capabilities": results,
     }
@@ -225,17 +268,59 @@ def _architecture_result(root: Path, python_files: list[str]) -> dict[str, Any]:
     }
 
 
+def _wheel_snapshot(
+    output: Path, build_result: dict[str, Any]
+) -> tuple[str, bytes] | None:
+    wheels = sorted((output / "wheel").glob("*.whl"))
+    if build_result["status"] != "PASS" or len(wheels) != 1:
+        return None
+    try:
+        descriptor = os.open(wheels[0], os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ARCHIVE_BYTES:
+                return None
+            chunks: list[bytes] = []
+            remaining = info.st_size
+            while remaining:
+                chunk = os.read(descriptor, min(65536, remaining))
+                if not chunk:
+                    return None
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+            after = os.fstat(descriptor)
+            if os.read(descriptor, 1) or (
+                after.st_size,
+                after.st_mtime_ns,
+                after.st_ctime_ns,
+                after.st_ino,
+            ) != (
+                info.st_size,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+                info.st_ino,
+            ):
+                return None
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return None
+    return wheels[0].name, raw
+
+
 def _package_result(
-    root: Path, output: Path, build_result: dict[str, Any]
+    root: Path,
+    wheel: tuple[str, bytes] | None,
+    build_result: dict[str, Any],
 ) -> dict[str, Any]:
     started = _now()
     errors: list[str] = []
-    wheels = sorted((output / "wheel").glob("*.whl"))
     evidence: dict[str, Any] | None = None
-    if build_result["status"] != "PASS" or len(wheels) != 1:
+    if build_result["status"] != "PASS" or wheel is None:
         errors.append("contained build did not produce exactly one wheel")
     else:
-        evidence, wheel_errors = audit_candidate_wheel(root, wheels[0])
+        evidence, wheel_errors = audit_candidate_wheel_bytes(root, *wheel)
         errors.extend(wheel_errors)
     return {
         "capability": "package_audit",
@@ -245,11 +330,64 @@ def _package_result(
         "evidence": {
             "started_at": started,
             "completed_at": _now(),
-            "wheel_sha256": sha256_file(wheels[0]) if len(wheels) == 1 else None,
+            "wheel_sha256": sha256(wheel[1]).hexdigest() if wheel else None,
             "audit": evidence,
             "errors": errors,
         },
     }
+
+
+def _apply_wheel_closure(
+    profile: str,
+    wheel_bytes: bytes,
+    package_result: dict[str, Any],
+    package_sources: dict[str, bytes] | None,
+    source_errors: list[str],
+) -> None:
+    errors = package_result["evidence"]["errors"]
+    discovery = discover_wheel_profile(wheel_bytes)
+    try:
+        validate_profile_discovery(discovery, selected_profile=profile)
+    except ValueError as exc:
+        errors.append(str(exc))
+    if profile == SQLITE_PROFILE:
+        errors.extend(source_errors)
+        if not source_errors:
+            errors.extend(
+                wheel_source_binding_errors_from_snapshot(
+                    package_sources or {}, wheel_bytes
+                )
+            )
+    if errors:
+        package_result["status"] = "BLOCK_TECHNICAL"
+
+
+def _run_sqlite_bounded(
+    wheel_name: str | None, wheel_bytes: bytes | None
+) -> dict[str, Any]:
+    if wheel_name is None or wheel_bytes is None:
+        return run_sqlite_supportability(None)
+
+    def timed_out(_signum: int, _frame: Any) -> None:
+        raise TimeoutError("SQLite adapter timed out after 120 seconds")
+
+    sigalrm = getattr(signal, "SIGALRM", None)
+    alarm = getattr(signal, "alarm", None)
+    if sigalrm is None or alarm is None:
+        result = run_sqlite_supportability(None)
+        result["evidence"]["errors"] = ["SQLite adapter hard timeout is unavailable"]
+        return result
+    previous = signal.signal(sigalrm, timed_out)
+    alarm(SQLITE_ADAPTER_TIMEOUT)
+    try:
+        return run_sqlite_supportability(Path(wheel_name), wheel_bytes=wheel_bytes)
+    except TimeoutError as exc:
+        result = run_sqlite_supportability(None)
+        result["evidence"]["errors"] = [str(exc)]
+        return result
+    finally:
+        alarm(0)
+        signal.signal(sigalrm, previous)
 
 
 def _benchmark_result(
@@ -331,13 +469,9 @@ def _bounded_command(command: list[str], cwd: Path) -> dict[str, Any]:
             break
         time.sleep(0.01)
     if termination != "EXITED":
-        kill_group = getattr(os, "killpg", None)
-        kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-        if callable(kill_group):
-            kill_group(process.pid, kill_signal)
-        else:  # pragma: no cover - the profile runtime is Linux
-            process.kill()
+        _kill_process_group(process)
     exit_code = process.wait(timeout=10)
+    _kill_process_group(process)
     for thread in threads:
         thread.join(timeout=5)
     completed = datetime.now(UTC)
@@ -354,6 +488,18 @@ def _bounded_command(command: list[str], cwd: Path) -> dict[str, Any]:
         "stderr": stderr,
         "summary": _summary(stdout, stderr),
     }
+
+
+def _kill_process_group(process: subprocess.Popen[bytes]) -> None:
+    kill_group = getattr(os, "killpg", None)
+    kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+    try:
+        if callable(kill_group):
+            kill_group(process.pid, kill_signal)
+        elif process.poll() is None:  # pragma: no cover - profile runtime is Linux
+            process.kill()
+    except ProcessLookupError:
+        pass
 
 
 def _environment() -> dict[str, str]:
@@ -492,16 +638,52 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--benchmark-root", required=True, type=Path)
     parser.add_argument("--evaluator-sha", required=True)
+    parser.add_argument(
+        "--profile",
+        choices=(STANDARD_PROFILE, SQLITE_PROFILE),
+        default=STANDARD_PROFILE,
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     result = run_standard_profile(
-        arguments.workspace, arguments.benchmark_root, arguments.evaluator_sha
+        arguments.workspace,
+        arguments.benchmark_root,
+        arguments.evaluator_sha,
+        arguments.profile,
     )
-    print(PROFILE_MARKER + json.dumps(result, sort_keys=True, separators=(",", ":")))
+    if arguments.profile == SQLITE_PROFILE:
+        print(
+            SQLITE_PROFILE_MARKER + _write_sqlite_profile(arguments.workspace, result)
+        )
+    else:
+        print(
+            PROFILE_MARKER + json.dumps(result, sort_keys=True, separators=(",", ":"))
+        )
     return 0 if result["status"] == "PASS" else 1
+
+
+def _write_sqlite_profile(workspace: Path, result: dict[str, Any]) -> str:
+    raw = json.dumps(result, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    destination = workspace / _OUTPUT_DIR / _SQLITE_PROFILE_FILE
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(destination, flags, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(raw)
+        fchmod = getattr(os, "fchmod", None)
+        if not callable(fchmod):
+            raise RuntimeError("SQLite profile sidecar requires POSIX permissions")
+        fchmod(stream.fileno(), 0o644)
+    compact = {
+        "schema_version": "1.0",
+        "profile": SQLITE_PROFILE,
+        "status": result["status"],
+        "capabilities_path": f"{_OUTPUT_DIR}/{_SQLITE_PROFILE_FILE}",
+        "capabilities_sha256": sha256(raw).hexdigest(),
+    }
+    return json.dumps(compact, sort_keys=True, separators=(",", ":"))
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@
         "docker_path": {"type": "string"},
         "docker_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "docker_host": {"type": "string", "minLength": 1},
-        "toolchain": {"type": "string", "enum": ["ruff==0.15.21", "python.standard-profile.v1"]},
+        "toolchain": {"type": "string", "enum": ["ruff==0.15.21", "python.standard-profile.v1", "python.sqlite-profile.v1"]},
         "toolchain_sha256": {"type": "string", "enum": ["68971e86ff2a4bd44f45dc2dd28e590e785fea12dc966410ae269173ce6d64db", "a3febf305b754c41ab62abeee10437ad550b82d7810d8492393ca0cae5b3784d"]}
       },
       "additionalProperties": false
@@ -34,13 +34,13 @@
     "capabilities": {
       "type": "array",
       "minItems": 10,
-      "maxItems": 10,
+      "maxItems": 11,
       "items": {
         "type": "object",
         "required": ["capability", "adapter_id", "assurance_class", "status", "evidence"],
         "properties": {
-          "capability": {"type": "string", "enum": ["lint", "format", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "integrity"]},
-          "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1", "python.ruff-format-check.v1", "python.mypy.v1", "python.ruff-c901.v1", "python.architecture.v1", "python.unittest.v1", "python.wheel-build.v1", "python.package-audit.v1", "governance.phase1.v1", "git.diff-integrity.v1"]},
+          "capability": {"type": "string", "enum": ["lint", "format", "typecheck", "complexity", "architecture", "tests", "build", "package_audit", "benchmark", "integrity", "sql_supportability"]},
+          "adapter_id": {"type": "string", "enum": ["python.ruff-check.v1", "python.ruff-format-check.v1", "python.mypy.v1", "python.ruff-c901.v1", "python.architecture.v1", "python.unittest.v1", "python.wheel-build.v1", "python.package-audit.v1", "governance.phase1.v1", "git.diff-integrity.v1", "python.sqlite-supportability.v1"]},
           "assurance_class": {"type": "string", "enum": ["EVALUATOR_AUTHORITATIVE", "CONTAINED_BUILD", "COOPERATIVE_DYNAMIC"]},
           "status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
           "evidence": {"type": "object"}

@@ -11,6 +11,8 @@ from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import quote
 
 from governance_eval.artifact_verifier import REQUIRED_CONTEXT
+from governance_eval.capability_catalog import PROFILE_ADAPTERS
+from governance_eval.sqlite_policy import POLICY_SHA256
 from governance_eval.verifier_pipeline import (
     WORKFLOW_PATH,
     GitHubAPIClient,
@@ -24,7 +26,7 @@ MISSING_EVIDENCE_TIMEOUT = timedelta(minutes=15)
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _REPOSITORY_RE = re.compile(r"^[a-z0-9_.-]+/[a-z0-9_.-]+$")
-_ENTRY_FIELDS = {
+_BASE_ENTRY_FIELDS = {
     "repository",
     "repository_id",
     "candidate_workflow_path",
@@ -34,6 +36,11 @@ _ENTRY_FIELDS = {
     "standard_sha256",
     "required_context",
     "verifier_app_id",
+}
+_OPTIONAL_ENTRY_FIELDS = {
+    "profile",
+    "adoption_manifest_sha256",
+    "sqlite_policy_sha256",
 }
 
 
@@ -66,6 +73,9 @@ class Enrollment:
     standard_sha256: str
     required_context: str
     verifier_app_id: int
+    profile: str = "python.standard.v1"
+    adoption_manifest_sha256: str | None = None
+    sqlite_policy_sha256: str | None = None
 
 
 def load_registry(
@@ -160,6 +170,9 @@ def _process_pull(
             configuration_sha256=enrollment.configuration_sha256,
             standard_sha256=enrollment.standard_sha256,
             required_context=enrollment.required_context,
+            profile=enrollment.profile,
+            adoption_manifest_sha256=enrollment.adoption_manifest_sha256,
+            sqlite_policy_sha256=enrollment.sqlite_policy_sha256,
         ),
         output_directory=directory,
     )
@@ -289,7 +302,9 @@ def _selected(
 
 def _enrollment(value: Any, governance_sha: str, app_id: int) -> Enrollment:
     item = _mapping(value, "enrollment")
-    if set(item) != _ENTRY_FIELDS:
+    if not _BASE_ENTRY_FIELDS.issubset(item) or not set(item).issubset(
+        _BASE_ENTRY_FIELDS | _OPTIONAL_ENTRY_FIELDS
+    ):
         raise ControllerError("enrollment fields are invalid")
     enrollment = Enrollment(**dict(item))
     if not _REPOSITORY_RE.fullmatch(enrollment.repository):
@@ -306,16 +321,39 @@ def _enrollment(value: Any, governance_sha: str, app_id: int) -> Enrollment:
         raise ControllerError("enrollment verifier App id is invalid")
     if enrollment.required_context != REQUIRED_CONTEXT:
         raise ControllerError("enrollment required context is invalid")
+    _validate_enrollment_profile(enrollment)
     if any(
         not _HASH_RE.fullmatch(value)
         for value in (
             enrollment.workflow_sha256,
             enrollment.configuration_sha256,
             enrollment.standard_sha256,
+            *(
+                (enrollment.adoption_manifest_sha256,)
+                if enrollment.adoption_manifest_sha256 is not None
+                else ()
+            ),
+            *(
+                (enrollment.sqlite_policy_sha256,)
+                if enrollment.sqlite_policy_sha256 is not None
+                else ()
+            ),
         )
     ):
         raise ControllerError("enrollment content hash is invalid")
     return enrollment
+
+
+def _validate_enrollment_profile(enrollment: Enrollment) -> None:
+    if enrollment.profile not in PROFILE_ADAPTERS:
+        raise ControllerError("enrollment profile is unsupported")
+    if enrollment.profile == "python.sqlite.v1":
+        if not enrollment.adoption_manifest_sha256:
+            raise ControllerError("SQLite enrollment lacks adoption manifest binding")
+        if enrollment.sqlite_policy_sha256 != POLICY_SHA256:
+            raise ControllerError("SQLite enrollment policy hash is invalid")
+    elif enrollment.sqlite_policy_sha256 is not None:
+        raise ControllerError("standard enrollment has unexpected SQLite policy")
 
 
 def _validate_pull_repository(pull: Mapping[str, Any], enrollment: Enrollment) -> None:
@@ -341,6 +379,9 @@ def _result(
     return {
         "repository": enrollment.repository,
         "repository_id": enrollment.repository_id,
+        "profile": enrollment.profile,
+        "adoption_manifest_sha256": enrollment.adoption_manifest_sha256,
+        "sqlite_policy_sha256": enrollment.sqlite_policy_sha256,
         "pull_request": pull_request,
         "head_sha": head_sha,
         "candidate_run_id": run_id,

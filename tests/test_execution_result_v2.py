@@ -9,7 +9,10 @@ from os import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from governance_eval.capability_catalog import STANDARD_PROFILE_ADAPTERS
+from governance_eval.capability_catalog import (
+    SQLITE_PROFILE_ADAPTERS,
+    STANDARD_PROFILE_ADAPTERS,
+)
 from governance_eval.docker_runtime import (
     _result as host_result,
 )
@@ -17,7 +20,19 @@ from governance_eval.docker_runtime import docker_run_argv, runtime_root_path
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, compile_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
 from governance_eval.hashing import sha256_json
+from governance_eval.sqlite_policy import (
+    CERTIFIED_SQLITE_IDENTITY,
+    POLICY_ID,
+    POLICY_SHA256,
+)
+from governance_eval.sqlite_supportability import (
+    MAX_AST_NODES,
+    MAX_SOURCE_BYTES,
+    _limit_evidence,
+)
 from test_execution_plan_v2 import _receipt
+
+_WHEEL_SHA256 = "a" * 64
 
 
 def _stream(content: bytes = b"") -> dict[str, object]:
@@ -91,6 +106,109 @@ def _result() -> tuple[dict[str, object], object, object]:
     return payload, plan, receipt
 
 
+def _sqlite_evidence() -> dict[str, object]:
+    return {
+        "schema_version": "1.0",
+        "policy_id": POLICY_ID,
+        "policy_sha256": POLICY_SHA256,
+        "wheel_sha256": _WHEEL_SHA256,
+        "gate_implementation": "PASS",
+        "repo_sql_supportability": "PASS",
+        "sql_behavior_proof": "PASS",
+        "files": [
+            {"path": "package/db.py", "bytes": 1, "sha256": sha256(b"x").hexdigest()}
+        ],
+        "sinks": [{"path": "package/db.py", "line": 1, "sink": "execute"}],
+        "receiver_provenance": [
+            {
+                "path": "package/db.py",
+                "line": 1,
+                "receiver": "connection",
+                "proof": "sqlite annotation",
+            }
+        ],
+        "resources": [],
+        "preparations": [
+            {
+                "path": "package/db.py",
+                "line": 1,
+                "sink": "execute",
+                "selector": None,
+                "sql_sha256": sha256(b"SELECT 1").hexdigest(),
+                "status": "PASS",
+                "error": None,
+            }
+        ],
+        "sqlite_identity": {**CERTIFIED_SQLITE_IDENTITY, "observed_functions": []},
+        "counts": {
+            "ast_nodes": 1,
+            "files": 1,
+            "sinks": 1,
+            "source_bytes": 1,
+            "sql_statements": 1,
+        },
+        "limits": _limit_evidence(),
+        "started_at": "2026-07-19T12:00:00Z",
+        "completed_at": "2026-07-19T12:00:01Z",
+        "errors": [],
+    }
+
+
+def _sqlite_result() -> tuple[dict[str, object], object, object]:
+    receipt = _receipt()
+    plan = compile_execution_plan_v2(
+        receipt,
+        capability="standard_profile",
+        adapter_id="python.sqlite-profile.v1",
+    )
+    root = runtime_root_path(plan)
+    command = docker_run_argv(
+        docker=Path(plan.runtime["docker_path"]),
+        docker_host=plan.runtime["docker_host"],
+        plan=plan,
+        workspace=root / "workspace",
+        toolchain_root=root / "toolchain",
+        container_name="governance-sqlite-profile",
+    )
+    capabilities = [
+        {
+            "capability": capability,
+            "adapter_id": adapter_id,
+            "assurance_class": assurance,
+            "status": "PASS",
+            "evidence": (
+                _sqlite_evidence()
+                if capability == "sql_supportability"
+                else {"wheel_sha256": _WHEEL_SHA256}
+                if capability == "package_audit"
+                else {}
+            ),
+        }
+        for capability, adapter_id, assurance in SQLITE_PROFILE_ADAPTERS
+    ]
+    started = datetime(2026, 7, 19, 12, 0, tzinfo=UTC)
+    outcome = {
+        "termination": "EXITED",
+        "exit_code": 0,
+        "stdout": _stream(),
+        "stderr": _stream(),
+        "started_at": started,
+        "completed_at": started + timedelta(seconds=1),
+    }
+    payload = host_result(
+        plan,
+        receipt,
+        None,
+        plan.runtime["docker_host"],
+        command,
+        started,
+        outcome=outcome,
+        errors=[],
+        profile=capabilities,
+    )
+    return payload, plan, receipt
+
+
 class ExecutionResultV2Tests(unittest.TestCase):
     def test_accepts_typed_profile_and_rejects_assurance_mutation(self) -> None:
         receipt = _receipt()
@@ -150,8 +268,139 @@ class ExecutionResultV2Tests(unittest.TestCase):
             "INTEGRITY_INVALID",
         )
 
+    def test_accepts_sqlite_profile_and_rejects_capability_omission(self) -> None:
+        payload, plan, receipt = _sqlite_result()
+        capabilities = payload["capabilities"]
+        self.assertEqual(
+            validate_execution_result_v2(payload, plan, receipt)["integrity_status"],
+            "INTEGRITY_VALID",
+        )
+
+        for mutation in (
+            "pass error",
+            "orphan preparation",
+            "provenance",
+            "AST bound",
+            "source bound",
+            "function",
+            "wheel",
+            "resource",
+        ):
+            with self.subTest(mutation=mutation):
+                hostile = deepcopy(payload)
+                evidence = hostile["capabilities"][-1]["evidence"]
+                if mutation == "pass error":
+                    evidence["preparations"][0]["error"] = "not authorized"
+                elif mutation == "orphan preparation":
+                    evidence["preparations"].append(
+                        {**evidence["preparations"][0], "line": 2}
+                    )
+                    evidence["counts"]["sql_statements"] += 1
+                elif mutation == "provenance":
+                    evidence["receiver_provenance"][0]["line"] = 2
+                elif mutation == "AST bound":
+                    evidence["counts"]["ast_nodes"] = MAX_AST_NODES + 1
+                elif mutation == "source bound":
+                    evidence["counts"]["source_bytes"] = MAX_SOURCE_BYTES + 1
+                elif mutation == "function":
+                    evidence["sqlite_identity"]["observed_functions"] = ["abs"]
+                elif mutation == "wheel":
+                    evidence["wheel_sha256"] = "b" * 64
+                else:
+                    evidence["resources"] = ["package/missing.sql"]
+                hostile["artifact_id"] = sha256_json({**hostile, "artifact_id": ""})
+                self.assertEqual(
+                    validate_execution_result_v2(hostile, plan, receipt)[
+                        "integrity_status"
+                    ],
+                    "INTEGRITY_INVALID",
+                )
+
+        hostile = deepcopy(payload)
+        hostile["capabilities"][-1]["evidence"]["policy_sha256"] = "0" * 64
+        hostile["artifact_id"] = sha256_json({**hostile, "artifact_id": ""})
+        self.assertEqual(
+            validate_execution_result_v2(hostile, plan, receipt)["integrity_status"],
+            "INTEGRITY_INVALID",
+        )
+
+        payload["capabilities"] = capabilities[:-1]
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
+        self.assertEqual(
+            validate_execution_result_v2(payload, plan, receipt)["integrity_status"],
+            "INTEGRITY_INVALID",
+        )
+
+    def test_rejects_hostile_sqlite_evidence_semantics(self) -> None:
+        payload, plan, receipt = _sqlite_result()
+        for mutation in (
+            "null wheel identities",
+            "reversed evidence time",
+            "duplicate preparation",
+            "traversal paths",
+            "zero AST",
+            "zero sinks",
+        ):
+            with self.subTest(mutation=mutation):
+                hostile = deepcopy(payload)
+                evidence = hostile["capabilities"][-1]["evidence"]
+                if mutation == "null wheel identities":
+                    evidence["wheel_sha256"] = None
+                    next(
+                        item
+                        for item in hostile["capabilities"]
+                        if item["capability"] == "package_audit"
+                    )["evidence"]["wheel_sha256"] = None
+                elif mutation == "reversed evidence time":
+                    evidence["started_at"] = "2026-07-19T12:00:02Z"
+                elif mutation == "duplicate preparation":
+                    evidence["preparations"].append(
+                        deepcopy(evidence["preparations"][0])
+                    )
+                    evidence["counts"]["sql_statements"] += 1
+                elif mutation == "traversal paths":
+                    for collection in (
+                        evidence["files"],
+                        evidence["sinks"],
+                        evidence["receiver_provenance"],
+                        evidence["preparations"],
+                    ):
+                        collection[0]["path"] = "../escape.py"
+                elif mutation == "zero AST":
+                    evidence["counts"]["ast_nodes"] = 0
+                else:
+                    evidence["sinks"] = []
+                    evidence["receiver_provenance"] = []
+                    evidence["preparations"] = []
+                    evidence["counts"]["sinks"] = 0
+                    evidence["counts"]["sql_statements"] = 0
+                hostile["artifact_id"] = sha256_json({**hostile, "artifact_id": ""})
+                self.assertEqual(
+                    validate_execution_result_v2(hostile, plan, receipt)[
+                        "integrity_status"
+                    ],
+                    "INTEGRITY_INVALID",
+                )
+
     def test_accepts_exact_host_result(self) -> None:
         payload, plan, receipt = _result()
+
+        assessment = validate_execution_result_v2(payload, plan, receipt)
+
+        self.assertEqual(assessment["integrity_status"], "INTEGRITY_VALID")
+
+    def test_accepts_safe_unicode_sqlite_evidence_path(self) -> None:
+        payload, plan, receipt = _sqlite_result()
+        evidence = payload["capabilities"][-1]["evidence"]
+        path = "package/" + "é" * 129 + ".py"
+        for collection in (
+            evidence["files"],
+            evidence["sinks"],
+            evidence["receiver_provenance"],
+            evidence["preparations"],
+        ):
+            collection[0]["path"] = path
+        payload["artifact_id"] = sha256_json({**payload, "artifact_id": ""})
 
         assessment = validate_execution_result_v2(payload, plan, receipt)
 

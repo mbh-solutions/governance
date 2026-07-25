@@ -1,0 +1,134 @@
+{
+  "type": "object",
+  "required": ["schema_version", "policy_id", "policy_sha256", "wheel_sha256", "gate_implementation", "repo_sql_supportability", "sql_behavior_proof", "files", "sinks", "receiver_provenance", "resources", "preparations", "sqlite_identity", "counts", "limits", "started_at", "completed_at", "errors"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "policy_id": {"type": "string", "enum": ["sqlite-policy.v1"]},
+    "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "wheel_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "gate_implementation": {"$ref": "#/$defs/status"},
+    "repo_sql_supportability": {"$ref": "#/$defs/status"},
+    "sql_behavior_proof": {"$ref": "#/$defs/status"},
+    "files": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/file"}},
+    "sinks": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/sink"}},
+    "receiver_provenance": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/provenance"}},
+    "resources": {"type": "array", "maxItems": 10000, "items": {"type": "string", "minLength": 1}},
+    "preparations": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/preparation"}},
+    "sqlite_identity": {"$ref": "#/$defs/sqlite_identity"},
+    "counts": {"$ref": "#/$defs/counts"},
+    "limits": {"$ref": "#/$defs/limits"},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "errors": {"type": "array", "maxItems": 10000, "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "status": {"type": "string", "enum": ["PASS", "FAIL"]},
+    "file": {
+      "type": "object",
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 2097152},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "sink": {
+      "type": "object",
+      "required": ["path", "line", "sink"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1},
+        "sink": {"type": "string", "enum": ["execute", "executemany", "executescript"]}
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["path", "line", "receiver", "proof"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1},
+        "receiver": {"type": "string", "minLength": 1},
+        "proof": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "preparation": {
+      "type": "object",
+      "required": ["path", "line", "sink", "selector", "sql_sha256", "status", "error"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1},
+        "sink": {"type": "string", "enum": ["execute", "executemany", "executescript"]},
+        "selector": {"type": ["string", "null"]},
+        "sql_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "status": {"type": "string", "enum": ["PASS", "BLOCK_TECHNICAL"]},
+        "error": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "sqlite_identity": {
+      "oneOf": [
+        {"type": "object", "additionalProperties": false},
+        {
+          "type": "object",
+          "required": ["version", "compile_options_sha256", "enable_fts5", "observed_functions"],
+          "properties": {
+            "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "compile_options_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "enable_fts5": {"type": "boolean"},
+            "observed_functions": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "required": ["ast_nodes", "files", "sinks", "source_bytes", "sql_statements"],
+      "properties": {
+        "ast_nodes": {"type": "integer", "minimum": 0},
+        "files": {"type": "integer", "minimum": 0},
+        "sinks": {"type": "integer", "minimum": 0},
+        "source_bytes": {"type": "integer", "minimum": 0},
+        "sql_statements": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "required": ["files", "file_bytes", "source_bytes", "ast_nodes", "sinks", "statements", "sql_bytes", "adapter_timeout_seconds", "statement_timeout_seconds", "statement_vm_operations", "sqlite_limits", "initialization"],
+      "properties": {
+        "files": {"type": "integer", "enum": [10000]},
+        "file_bytes": {"type": "integer", "enum": [2097152]},
+        "source_bytes": {"type": "integer", "enum": [33554432]},
+        "ast_nodes": {"type": "integer", "enum": [1000000]},
+        "sinks": {"type": "integer", "enum": [10000]},
+        "statements": {"type": "integer", "enum": [10000]},
+        "sql_bytes": {"type": "integer", "enum": [1048576]},
+        "adapter_timeout_seconds": {"type": "integer", "enum": [120]},
+        "statement_timeout_seconds": {"type": "integer", "enum": [2]},
+        "statement_vm_operations": {"type": "integer", "enum": [10000000]},
+        "sqlite_limits": {
+          "type": "object",
+          "required": ["SQLITE_LIMIT_ATTACHED", "SQLITE_LIMIT_COLUMN", "SQLITE_LIMIT_COMPOUND_SELECT", "SQLITE_LIMIT_EXPR_DEPTH", "SQLITE_LIMIT_FUNCTION_ARG", "SQLITE_LIMIT_LENGTH", "SQLITE_LIMIT_LIKE_PATTERN_LENGTH", "SQLITE_LIMIT_SQL_LENGTH", "SQLITE_LIMIT_TRIGGER_DEPTH", "SQLITE_LIMIT_VARIABLE_NUMBER", "SQLITE_LIMIT_VDBE_OP", "SQLITE_LIMIT_WORKER_THREADS"],
+          "properties": {
+            "SQLITE_LIMIT_ATTACHED": {"enum": [0]}, "SQLITE_LIMIT_COLUMN": {"enum": [2000]}, "SQLITE_LIMIT_COMPOUND_SELECT": {"enum": [500]}, "SQLITE_LIMIT_EXPR_DEPTH": {"enum": [1000]}, "SQLITE_LIMIT_FUNCTION_ARG": {"enum": [127]}, "SQLITE_LIMIT_LENGTH": {"enum": [2097152]}, "SQLITE_LIMIT_LIKE_PATTERN_LENGTH": {"enum": [50000]}, "SQLITE_LIMIT_SQL_LENGTH": {"enum": [1048576]}, "SQLITE_LIMIT_TRIGGER_DEPTH": {"enum": [100]}, "SQLITE_LIMIT_VARIABLE_NUMBER": {"enum": [32766]}, "SQLITE_LIMIT_VDBE_OP": {"enum": [250000]}, "SQLITE_LIMIT_WORKER_THREADS": {"enum": [0]}
+          },
+          "additionalProperties": false
+        },
+        "initialization": {
+          "type": "object",
+          "required": ["cache_size", "foreign_keys", "journal_mode", "max_page_count", "recursive_triggers", "temp_store", "trusted_schema"],
+          "properties": {
+            "cache_size": {"enum": [-8192]}, "foreign_keys": {"enum": ["ON"]}, "journal_mode": {"enum": ["MEMORY"]}, "max_page_count": {"enum": [16384]}, "recursive_triggers": {"enum": ["OFF"]}, "temp_store": {"enum": ["MEMORY"]}, "trusted_schema": {"enum": ["OFF"]}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

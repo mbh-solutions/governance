@@ -5,10 +5,16 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Mapping
 
-from governance_eval.capability_catalog import get_capability_adapter
+from governance_eval.capability_catalog import (
+    get_capability_adapter,
+    is_profile_runner,
+    runner_profile,
+)
 from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.execution_plan_v2 import ExecutionPlanV2, assess_execution_plan_v2
 from governance_eval.execution_result_v2 import validate_execution_result_v2
+from governance_eval.sqlite_policy import POLICY_SHA256
+from governance_eval.sqlite_supportability import validate_profile_discovery
 
 
 SCHEMA_VERSION = "governance_candidate_bundle.v1"
@@ -36,6 +42,9 @@ def build_candidate_bundle(
     workflow_file_sha256: str,
     event_name: str,
     ai_review: Mapping[str, Any],
+    profile: str,
+    profile_discovery: Mapping[str, Any],
+    adoption_manifest_sha256: str,
 ) -> dict[str, bytes]:
     receipt_payload = receipt.to_json()
     plan_payload = plan.to_json()
@@ -54,6 +63,16 @@ def build_candidate_bundle(
     if result_assessment["integrity_status"] != "INTEGRITY_VALID":
         raise CandidateBundleError("execution result integrity is invalid")
     adapter = get_capability_adapter(plan.step["step_id"], plan.step["adapter_id"])
+    if (
+        is_profile_runner(adapter.adapter_id)
+        and runner_profile(adapter.adapter_id) != profile
+    ):
+        raise CandidateBundleError("execution plan profile differs from configuration")
+    if not is_profile_runner(adapter.adapter_id) and profile != "python.standard.v1":
+        raise CandidateBundleError("SQLite evidence requires the typed profile runner")
+    validate_profile_discovery(profile_discovery, selected_profile=profile)
+    if not _hex(adoption_manifest_sha256, 64):
+        raise CandidateBundleError("adoption manifest identity is invalid")
     normalized_ai = _normalize_ai_review(ai_review, receipt.pull_request["head_sha"])
     decision = _decision(result_payload, normalized_ai)
     payloads = {
@@ -77,6 +96,9 @@ def build_candidate_bundle(
         },
         "configuration_sha256": receipt.config_sha256,
         "standard_sha256": receipt.standard_sha256,
+        "profile": profile,
+        "profile_discovery": dict(profile_discovery),
+        "adoption_manifest_sha256": adoption_manifest_sha256,
         "adapter": {
             "capability": adapter.capability,
             "adapter_id": adapter.adapter_id,
@@ -92,6 +114,10 @@ def build_candidate_bundle(
             for name, content in sorted(payloads.items())
         },
     }
+    if profile == "python.sqlite.v1":
+        if plan.step.get("sqlite_policy_sha256") != POLICY_SHA256:
+            raise CandidateBundleError("SQLite policy plan binding is invalid")
+        manifest["sqlite_policy_sha256"] = POLICY_SHA256
     payloads["candidate-bundle.json"] = _canonical_json(manifest)
     return payloads
 

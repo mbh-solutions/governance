@@ -288,3 +288,7 @@ def _target_summary(result: dict) -> dict:
         "artifact_content_hash": result["artifact_content_hash"],
         "artifact_path": result.get("artifact_path"),
     }
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

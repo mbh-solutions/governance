@@ -1,0 +1,29 @@
+{
+  "type": "object",
+  "required": ["schema_version", "required_profile", "sqlite_detected", "files_scanned", "resources", "sinks", "errors", "started_at", "completed_at", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"type": "string", "enum": ["1.0"]},
+    "required_profile": {"type": "string", "enum": ["python.standard.v1", "python.sqlite.v1"]},
+    "sqlite_detected": {"type": "boolean"},
+    "files_scanned": {"type": "integer", "minimum": 0, "maximum": 10000},
+    "resources": {"type": "array", "maxItems": 10000, "items": {"type": "string", "minLength": 1}},
+    "sinks": {"type": "array", "maxItems": 10000, "items": {"$ref": "#/$defs/sink"}},
+    "errors": {"type": "array", "maxItems": 10000, "items": {"type": "string", "minLength": 1}},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "sink": {
+      "type": "object",
+      "required": ["path", "line", "sink"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "line": {"type": "integer", "minimum": 1},
+        "sink": {"type": "string", "enum": ["execute", "executemany", "executescript"]}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

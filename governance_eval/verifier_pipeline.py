@@ -15,6 +15,14 @@ from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import quote, urlparse
 
+from governance_eval.adoption import (
+    CONFIG_PATH,
+    MANIFEST_PATH,
+    STANDARD_PATH as ADOPTION_STANDARD_PATH,
+    WORKFLOW_PATH as ADOPTION_WORKFLOW_PATH,
+    validate_adoption_config,
+    validate_adoption_manifest,
+)
 from governance_eval.artifact_verifier import (
     GITHUB_ACTIONS_APP_ID,
     MAX_ARCHIVE_BYTES,
@@ -25,6 +33,8 @@ from governance_eval.artifact_verifier import (
     verify_candidate_artifact,
 )
 from governance_eval.candidate_bundle import artifact_name
+from governance_eval.capability_catalog import PROFILE_ADAPTERS
+from governance_eval.sqlite_policy import POLICY_SHA256
 from governance_eval.candidate_pipeline import (
     GOVERNANCE_REPOSITORY,
     GOVERNANCE_REPOSITORY_ID,
@@ -73,6 +83,9 @@ class VerificationTarget:
     configuration_sha256: str
     standard_sha256: str
     required_context: str
+    profile: str = "python.standard.v1"
+    adoption_manifest_sha256: str | None = None
+    sqlite_policy_sha256: str | None = None
 
 
 class GitHubAPIClient:
@@ -381,17 +394,55 @@ def _collect_context(
         raise VerifierPipelineError("Governance evaluator repository id mismatch")
     head_commit = _commit(api, target.repository, head_sha)
     evaluator_commit = _commit(api, GOVERNANCE_REPOSITORY, target.evaluator_sha)
-    workflow_sha256 = _content_sha256(api, target.repository, WORKFLOW_PATH, head_sha)
-    configuration_sha256 = _content_sha256(
-        api, target.repository, CONFIGURATION_PATH, head_sha
-    )
-    standard_sha256 = _content_sha256(api, target.repository, STANDARD_PATH, head_sha)
+    workflow_raw = _content(api, target.repository, WORKFLOW_PATH, head_sha)
+    configuration_raw = _content(api, target.repository, CONFIGURATION_PATH, head_sha)
+    standard_raw = _content(api, target.repository, STANDARD_PATH, head_sha)
+    manifest_raw = _content(api, target.repository, MANIFEST_PATH, head_sha)
+    workflow_sha256 = sha256(workflow_raw).hexdigest()
+    configuration_sha256 = sha256(configuration_raw).hexdigest()
+    standard_sha256 = sha256(standard_raw).hexdigest()
+    adoption_manifest_sha256 = sha256(manifest_raw).hexdigest()
     if (
         workflow_sha256 != target.workflow_sha256
         or configuration_sha256 != target.configuration_sha256
         or standard_sha256 != target.standard_sha256
     ):
         raise VerifierPipelineError("enrolled workflow or configuration hash mismatch")
+    if (
+        target.adoption_manifest_sha256 is not None
+        and adoption_manifest_sha256 != target.adoption_manifest_sha256
+    ):
+        raise VerifierPipelineError("enrolled adoption manifest hash mismatch")
+    configuration = _json_content(configuration_raw, "adoption configuration")
+    manifest = _json_content(manifest_raw, "adoption manifest")
+    verifier = _nested(configuration, "verifier")
+    app_id = _positive_integer(verifier.get("app_id"), "configuration App id")
+    if app_id != target.verifier_app_id:
+        raise VerifierPipelineError("configuration verifier App mismatch")
+    validate_adoption_config(
+        configuration,
+        governance_sha=target.evaluator_sha,
+        verifier_app_id=target.verifier_app_id,
+        profile=target.profile,
+    )
+    validate_adoption_manifest(
+        manifest,
+        repository=target.repository,
+        repository_id=target.repository_id,
+        governance_sha=target.evaluator_sha,
+        verifier_app_id=target.verifier_app_id,
+        profile=target.profile,
+    )
+    if _nested(configuration, "standard").get("sha256") != standard_sha256:
+        raise VerifierPipelineError("configuration standard content hash mismatch")
+    _validate_manifest_files(
+        manifest,
+        {
+            CONFIG_PATH: configuration_raw,
+            ADOPTION_STANDARD_PATH: standard_raw,
+            ADOPTION_WORKFLOW_PATH: workflow_raw,
+        },
+    )
     return VerifierContext(
         repository_id=repository["id"],
         repository_full_name=repository["full_name"],
@@ -423,6 +474,9 @@ def _collect_context(
         ),
         verified_at=_timestamp(verified_at, "verified_at"),
         verifier_app_id=target.verifier_app_id,
+        profile=target.profile,
+        adoption_manifest_sha256=adoption_manifest_sha256,
+        sqlite_policy_sha256=target.sqlite_policy_sha256 or "",
     )
 
 
@@ -580,9 +634,7 @@ def _tree_sha(commit: Mapping[str, Any]) -> str:
     return _sha(_nested(commit, "tree").get("sha"), "Git tree")
 
 
-def _content_sha256(
-    api: VerifierAPI, repository: str, path: str, commit_sha: str
-) -> str:
+def _content(api: VerifierAPI, repository: str, path: str, commit_sha: str) -> bytes:
     payload = api.get_json(
         f"/repos/{_repository_path(repository)}/contents/{quote(path, safe='/')}?ref={commit_sha}"
     )
@@ -597,7 +649,37 @@ def _content_sha256(
         raise VerifierPipelineError("repository content encoding is invalid") from exc
     if len(raw) > MAX_JSON_BYTES:
         raise VerifierPipelineError("repository content exceeds size limit")
-    return sha256(raw).hexdigest()
+    return raw
+
+
+def _content_sha256(
+    api: VerifierAPI, repository: str, path: str, commit_sha: str
+) -> str:
+    return sha256(_content(api, repository, path, commit_sha)).hexdigest()
+
+
+def _json_content(raw: bytes, label: str) -> Mapping[str, Any]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise VerifierPipelineError(f"{label} is malformed") from exc
+    return _mapping(value, label)
+
+
+def _validate_manifest_files(
+    manifest: Mapping[str, Any], payloads: Mapping[str, bytes]
+) -> None:
+    files = _nested(manifest, "files")
+    if set(files) != set(payloads):
+        raise VerifierPipelineError("adoption manifest file set is invalid")
+    for name, raw in payloads.items():
+        receipt = _mapping(files.get(name), "adoption file receipt")
+        if receipt != {"bytes": len(raw), "sha256": sha256(raw).hexdigest()}:
+            raise VerifierPipelineError("adoption manifest file binding mismatch")
 
 
 def _validate_target(target: VerificationTarget) -> None:
@@ -621,6 +703,25 @@ def _validate_target(target: VerificationTarget) -> None:
         raise VerifierPipelineError("enrolled content hash is invalid")
     if target.required_context != REQUIRED_CONTEXT:
         raise VerifierPipelineError("required context differs from Governance contract")
+    if target.adoption_manifest_sha256 is not None and not _HASH_RE.fullmatch(
+        target.adoption_manifest_sha256
+    ):
+        raise VerifierPipelineError("enrolled adoption manifest hash is invalid")
+    _validate_target_profile(target)
+
+
+def _validate_target_profile(target: VerificationTarget) -> None:
+    if target.profile not in PROFILE_ADAPTERS:
+        raise VerifierPipelineError("enrolled profile is unsupported")
+    if target.profile == "python.sqlite.v1":
+        if target.adoption_manifest_sha256 is None:
+            raise VerifierPipelineError(
+                "SQLite enrollment lacks adoption manifest binding"
+            )
+        if target.sqlite_policy_sha256 != POLICY_SHA256:
+            raise VerifierPipelineError("SQLite enrollment policy hash is invalid")
+    elif target.sqlite_policy_sha256 is not None:
+        raise VerifierPipelineError("standard enrollment has unexpected SQLite policy")
 
 
 def _prepare_output(path: Path) -> None:
@@ -720,6 +821,10 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return value
 
 
+def _reject_constant(value: str) -> Any:
+    raise VerifierPipelineError(f"unsupported JSON constant: {value}")
+
+
 def _canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -751,6 +856,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--configuration-sha256", required=True)
     parser.add_argument("--standard-sha256", required=True)
     parser.add_argument("--required-context", required=True)
+    parser.add_argument(
+        "--profile", choices=tuple(PROFILE_ADAPTERS), default="python.standard.v1"
+    )
+    parser.add_argument("--adoption-manifest-sha256")
+    parser.add_argument("--sqlite-policy-sha256")
     parser.add_argument("--output-directory", required=True, type=Path)
     return parser
 
@@ -775,6 +885,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             configuration_sha256=arguments.configuration_sha256,
             standard_sha256=arguments.standard_sha256,
             required_context=arguments.required_context,
+            profile=arguments.profile,
+            adoption_manifest_sha256=arguments.adoption_manifest_sha256,
+            sqlite_policy_sha256=arguments.sqlite_policy_sha256,
         ),
         output_directory=arguments.output_directory,
     )

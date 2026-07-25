@@ -10,7 +10,15 @@ from tempfile import TemporaryDirectory
 from typing import Any, Mapping
 from unittest import mock
 
+from governance_eval.adoption import (
+    CONFIG_PATH,
+    MANIFEST_PATH,
+    _canonical_json,
+    _configuration,
+    _manifest,
+)
 from governance_eval.artifact_verifier import REQUIRED_CONTEXT, VerifierContext
+from governance_eval.sqlite_policy import POLICY_SHA256
 from governance_eval.verifier_pipeline import (
     CONFIGURATION_PATH,
     STANDARD_PATH,
@@ -65,6 +73,34 @@ class VerifierPipelineTests(unittest.TestCase):
         self.base = "a" * 40
         self.head = "b" * 40
         self.evaluator = "c" * 40
+        self.workflow = b"workflow\n"
+        self.standard = b"standard\n"
+        self.configuration = _canonical_json(
+            _configuration(
+                self.evaluator,
+                7654321,
+                sha256(self.standard).hexdigest(),
+            )
+        )
+        manifest = _manifest(
+            payloads={
+                WORKFLOW_PATH: self.workflow,
+                CONFIG_PATH: self.configuration,
+                STANDARD_PATH: self.standard,
+            },
+            repository=self.repository,
+            repository_id=101,
+            target={
+                "head_sha": "1" * 40,
+                "tree_sha": "2" * 40,
+                "status_sha256": "3" * 64,
+            },
+            governance_sha=self.evaluator,
+            verifier_app_id=7654321,
+            rollback_sha="f" * 40,
+            profile="python.standard.v1",
+        )
+        self.manifest = _canonical_json(manifest)
         self.target = VerificationTarget(
             repository=self.repository,
             pull_request=42,
@@ -73,10 +109,11 @@ class VerifierPipelineTests(unittest.TestCase):
             evaluator_sha=self.evaluator,
             verifier_app_id=7654321,
             repository_id=101,
-            workflow_sha256=sha256(b"workflow\n").hexdigest(),
-            configuration_sha256=sha256(b"config\n").hexdigest(),
-            standard_sha256=sha256(b"standard\n").hexdigest(),
+            workflow_sha256=sha256(self.workflow).hexdigest(),
+            configuration_sha256=sha256(self.configuration).hexdigest(),
+            standard_sha256=sha256(self.standard).hexdigest(),
             required_context=REQUIRED_CONTEXT,
+            adoption_manifest_sha256=sha256(self.manifest).hexdigest(),
         )
         self.responses = self._responses()
 
@@ -124,9 +161,12 @@ class VerifierPipelineTests(unittest.TestCase):
                 context.workflow_file_sha256, sha256(b"workflow\n").hexdigest()
             )
             self.assertEqual(
-                context.configuration_sha256, sha256(b"config\n").hexdigest()
+                context.configuration_sha256, sha256(self.configuration).hexdigest()
             )
-            self.assertEqual(context.standard_sha256, sha256(b"standard\n").hexdigest())
+            self.assertEqual(context.standard_sha256, sha256(self.standard).hexdigest())
+            self.assertEqual(
+                context.adoption_manifest_sha256, sha256(self.manifest).hexdigest()
+            )
             self.assertEqual(result["result"], "PASS")
             self.assertEqual(api.posts[0][1]["status"], "in_progress")
             self.assertEqual(api.posts[0][0], f"/repos/{self.repository}/check-runs")
@@ -350,12 +390,92 @@ class VerifierPipelineTests(unittest.TestCase):
         self.assertEqual(result["result"], "REJECT")
         self.assertIn("enrolled workflow", api.patches[0][1]["output"]["summary"])
 
+    def test_rejects_profile_substitution_and_manifest_hash_mismatch(self) -> None:
+        cases = (
+            (
+                replace(
+                    self.target,
+                    profile="python.sqlite.v1",
+                    sqlite_policy_sha256=POLICY_SHA256,
+                ),
+                "configuration differs",
+            ),
+            (
+                replace(self.target, adoption_manifest_sha256="f" * 64),
+                "adoption manifest hash",
+            ),
+        )
+        for target, expected in cases:
+            with self.subTest(expected=expected), TemporaryDirectory() as directory:
+                api = _FakeAPI(self.responses)
+                result = verify_and_publish(
+                    api=api,
+                    target=target,
+                    output_directory=Path(directory) / "proof",
+                )
+                self.assertEqual(result["result"], "REJECT")
+                self.assertIn(expected, api.patches[0][1]["output"]["summary"])
+
+    def test_rejects_configuration_standard_cross_binding_mismatch(self) -> None:
+        configuration = _canonical_json(
+            _configuration(self.evaluator, 7654321, "0" * 64)
+        )
+        manifest = _canonical_json(
+            _manifest(
+                payloads={
+                    WORKFLOW_PATH: self.workflow,
+                    CONFIG_PATH: configuration,
+                    STANDARD_PATH: self.standard,
+                },
+                repository=self.repository,
+                repository_id=101,
+                target={
+                    "head_sha": "1" * 40,
+                    "tree_sha": "2" * 40,
+                    "status_sha256": "3" * 64,
+                },
+                governance_sha=self.evaluator,
+                verifier_app_id=7654321,
+                rollback_sha="f" * 40,
+                profile="python.standard.v1",
+            )
+        )
+        responses = self._responses()
+        repository_path = f"/repos/{self.repository}"
+        for path, content in (
+            (CONFIGURATION_PATH, configuration),
+            (MANIFEST_PATH, manifest),
+        ):
+            responses[f"{repository_path}/contents/{path}?ref={self.head}"][
+                "content"
+            ] = base64.b64encode(content).decode()
+        target = replace(
+            self.target,
+            configuration_sha256=sha256(configuration).hexdigest(),
+            adoption_manifest_sha256=sha256(manifest).hexdigest(),
+        )
+        api = _FakeAPI(responses)
+        with TemporaryDirectory() as directory:
+            result = verify_and_publish(
+                api=api,
+                target=target,
+                output_directory=Path(directory) / "proof",
+            )
+
+        self.assertEqual(result["result"], "REJECT")
+        self.assertIn("standard content hash", api.patches[0][1]["output"]["summary"])
+
     def test_rejects_noncanonical_or_mutable_target_identity(self) -> None:
         cases = (
             replace(self.target, repository="MarkHeck-Solutions/example"),
             replace(self.target, pull_request=0),
             replace(self.target, evaluator_sha="main"),
             replace(self.target, verifier_app_id=0),
+            replace(
+                self.target,
+                profile="python.sqlite.v1",
+                sqlite_policy_sha256="0" * 64,
+            ),
         )
         for target in cases:
             with self.subTest(target=target):
@@ -440,9 +560,10 @@ class VerifierPipelineTests(unittest.TestCase):
             },
         }
         for path, content in (
-            (WORKFLOW_PATH, b"workflow\n"),
-            (CONFIGURATION_PATH, b"config\n"),
-            (STANDARD_PATH, b"standard\n"),
+            (WORKFLOW_PATH, self.workflow),
+            (CONFIGURATION_PATH, self.configuration),
+            (STANDARD_PATH, self.standard),
+            (MANIFEST_PATH, self.manifest),
         ):
             responses[f"{repository_path}/contents/{path}?ref={self.head}"] = {
                 "type": "file",

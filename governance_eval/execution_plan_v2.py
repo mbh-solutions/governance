@@ -10,6 +10,7 @@ from governance_eval.checkout_receipt import CheckoutReceipt
 from governance_eval.hashing import sha256_json
 from governance_eval.schema_validator import SchemaValidationError
 from governance_eval.schemas import validate_packaged_named
+from governance_eval.sqlite_policy import POLICY_SHA256
 
 _IMAGE = (
     "python@sha256:72d3d75f2639ab82b34b29390ad3d6e0827c775befee94edda8e9976818f488d"
@@ -65,10 +66,10 @@ def compile_execution_plan_v2(
         toolchain_sha256 = _RUFF_SHA256
         toolchain = {"ruff": "0.15.21"}
         argv = ["/opt/governance-toolchain/ruff", *adapter.arguments]
-    elif (capability, adapter_id) == (
-        "standard_profile",
+    elif capability == "standard_profile" and adapter_id in {
         "python.standard-profile.v1",
-    ):
+        "python.sqlite-profile.v1",
+    }:
         toolchain_sha256 = _PROFILE_TOOLCHAIN_SHA256
         toolchain = {
             "governance-eval": "0.1.0",
@@ -84,6 +85,17 @@ def compile_execution_plan_v2(
         ]
     else:
         raise ExecutionPlanV2Error("adapter has no authenticated Docker implementation")
+    step = {
+        "step_id": adapter.capability,
+        "adapter_id": adapter.adapter_id,
+        "toolchain": toolchain,
+        "argv": argv,
+        "working_directory": "/workspace",
+        "timeout_seconds": adapter.timeout_seconds,
+        "output_limit_bytes": adapter.output_limit_bytes,
+    }
+    if adapter_id == "python.sqlite-profile.v1":
+        step["sqlite_policy_sha256"] = POLICY_SHA256
     plan = ExecutionPlanV2(
         schema_version="2.0",
         plan_id="",
@@ -112,15 +124,7 @@ def compile_execution_plan_v2(
             "docker_sha256": receipt.docker["sha256"],
             "docker_host": receipt.docker["host"],
         },
-        step={
-            "step_id": adapter.capability,
-            "adapter_id": adapter.adapter_id,
-            "toolchain": toolchain,
-            "argv": argv,
-            "working_directory": "/workspace",
-            "timeout_seconds": adapter.timeout_seconds,
-            "output_limit_bytes": adapter.output_limit_bytes,
-        },
+        step=step,
     )
     return replace(plan, plan_id=sha256_json(_unsigned(plan)))
 
