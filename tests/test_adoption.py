@@ -9,10 +9,18 @@ from pathlib import Path
 from governance_eval.adoption import (
     AdoptionError,
     CONFIG_PATH,
+    MANIFEST_PATH,
+    NATIVE_AUTHORITY_MODE,
+    NATIVE_GOVERNANCE_REPOSITORY,
+    NATIVE_GOVERNANCE_REPOSITORY_ID,
+    NATIVE_WORKFLOW_PATH,
+    _canonical_json,
     generate_adoption_bundle,
     prove_adoption_bundle,
     validate_adoption_config,
+    validate_native_adoption_config,
 )
+from governance_eval.hashing import sha256_bytes
 from governance_eval.sqlite_policy import POLICY_SHA256
 
 
@@ -55,6 +63,76 @@ class AdoptionTests(unittest.TestCase):
             self.assertEqual(proof["status"], "PASS")
             self.assertEqual(before, self._state(target))
             self.assertEqual(len(proof["capabilities"]), 10)
+
+    def test_native_bundle_is_default_and_has_no_target_workflow_or_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            self._target(target)
+            bundle = root / "bundle"
+
+            manifest = generate_adoption_bundle(
+                repo_root=target,
+                output_dir=bundle,
+                github_repository="owner/repository",
+                repository_id=123,
+                governance_sha=self.governance_sha,
+                rollback_sha=self.rollback_sha,
+                source_root=self.source,
+            )
+            proof = prove_adoption_bundle(
+                repo_root=target,
+                bundle_dir=bundle,
+                artifacts_dir=root / "proof",
+                github_repository="owner/repository",
+            )
+            config = json.loads((bundle / CONFIG_PATH).read_text(encoding="utf-8"))
+
+            self.assertEqual(
+                self._files(bundle).keys(),
+                {
+                    CONFIG_PATH,
+                    ".github/governance/supportability-standard.md",
+                    MANIFEST_PATH,
+                },
+            )
+            self.assertNotIn("verifier", config)
+            self.assertNotIn("verifier", manifest)
+            self.assertEqual(
+                manifest["enforcement"],
+                {
+                    "mode": NATIVE_AUTHORITY_MODE,
+                    "workflow": {
+                        "repository": NATIVE_GOVERNANCE_REPOSITORY,
+                        "repository_id": NATIVE_GOVERNANCE_REPOSITORY_ID,
+                        "path": NATIVE_WORKFLOW_PATH,
+                        "sha": self.governance_sha,
+                    },
+                },
+            )
+            self.assertEqual(proof["enforcement"], manifest["enforcement"])
+            hostile = {**config, "command": "python attacker.py"}
+            with self.assertRaises(AdoptionError):
+                validate_native_adoption_config(
+                    hostile, governance_sha=self.governance_sha
+                )
+
+            manifest_path = bundle / MANIFEST_PATH
+            hostile_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            hostile_manifest["enforcement"]["workflow"]["repository"] = (
+                "attacker/governance"
+            )
+            unsigned = {**hostile_manifest}
+            unsigned.pop("bundle_sha256")
+            hostile_manifest["bundle_sha256"] = sha256_bytes(_canonical_json(unsigned))
+            manifest_path.write_bytes(_canonical_json(hostile_manifest))
+            with self.assertRaisesRegex(AdoptionError, "enforcement binding"):
+                prove_adoption_bundle(
+                    repo_root=target,
+                    bundle_dir=bundle,
+                    artifacts_dir=root / "hostile-proof",
+                    github_repository="owner/repository",
+                )
 
     def test_proof_rejects_arbitrary_configuration_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

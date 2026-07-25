@@ -2,6 +2,12 @@
 
 Implement, activate, and prove a reusable GitHub governance framework with independent Governance source qualification and explicit adopter enforcement.
 
+## Active native enforcement migration
+
+The current owner-authorized path makes an organization required workflow the default adopter authority. GitHub runs `.github/workflows/governance-required.yml` from an exact protected Governance SHA on each target `pull_request`; its stable final job is the required merge result. Native bundles contain typed configuration, the pinned standard, and exact-SHA adoption metadata, with no target-local Governance caller or verifier-App enrollment.
+
+The external verifier implementation and its receipts remain as legacy history until the native disposable and TWMN migrations, canaries, and immutable release pass. It is not the default architecture or a native release prerequisite. This section and ADR 0004 supersede conflicting adopter-authority and release-sequence text retained in earlier ADRs; independent source qualification and all evaluator, containment, profile, SQLite, and deterministic-decision controls remain unchanged.
+
 ## Goal
 
 Governance is a target-neutral evaluator and GitHub enforcement framework for solo, AI-directed software development. It must:
@@ -9,7 +15,7 @@ Governance is a target-neutral evaluator and GitHub enforcement framework for so
 - preserve the completed Phase 1 offline benchmark as a mandatory regression suite;
 - judge changes with deterministic code, not narrative approval;
 - execute target-specific capabilities through typed, versioned adapters;
-- separate candidate execution from the trusted verifier and authoritative merge decision;
+- separate untrusted candidate execution from the protected central evaluator and GitHub-native merge decision;
 - protect evaluator authority, credentials, evidence, scope, thresholds, and required-check identity from candidate control;
 - release through protected pull requests without making Governance application checks authoritative over Governance source edits;
 - prove clean, defective, and stale-evidence canaries before any target rollout.
@@ -92,7 +98,7 @@ These thresholds may not be weakened, narrowed, waived, or replaced by narrative
 - Source candidate execution is confined to the exact-hash `pull_request` workflow with read-only contents access. The base-controlled qualifier executes no candidate content; it validates the frozen source workflow pair and unique check producer, then accepts only the exact repository, PR, head, first-attempt run, and complete successful job set.
 - The source qualifier modules, workflow pair, pinned lock, and package contract must remain byte-identical to the trusted base during ordinary qualification. Intentional authority updates use the auditable pull-request-only maintainer lane.
 - Source-control settings changes require exact-repository guards, before-and-after API snapshots and hashes, fresh verification, and rollback only for an incomplete transaction. The previous self-referential required-check profile is not the desired baseline.
-- Adopters pin an exact certified Governance SHA. Candidate execution is untrusted and non-authoritative; an external verifier validates hostile evidence and emits the one stable required check through a dedicated verifier GitHub App.
+- Adopters pin an exact certified Governance SHA in typed configuration and an organization ruleset. The exact central required workflow evaluates untrusted candidate content and emits the one stable final required job.
 - `AI_REVIEW_UNAVAILABLE` is non-blocking after the deterministic cutoff. Valid exact-head, in-window findings at configured blocking severity remain RED.
 - The standard profile supports pull requests. Merge queue is optional and may be enabled only where current GitHub eligibility and event bindings are proved.
 - Work may use multiple finite local repair iterations until the frozen acceptance suite passes. Keep one active implementation pull request at a time.
@@ -109,7 +115,7 @@ Repository-specific cases, fixtures, typed capability declarations, bounded adap
 
 - Configuration selects supported typed capability and adapter identifiers, not arbitrary shell commands.
 - Each adapter is versioned, has positive and negative controls, and generates an immutable execution plan.
-- The evaluator assigns and the trusted verifier recomputes each adapter's assurance class. Candidate configuration cannot select or alter assurance.
+- The evaluator assigns and validates each adapter's assurance class. Candidate configuration cannot select or alter assurance. The legacy verifier independently recomputes it only for legacy installations.
 - `EVALUATOR_AUTHORITATIVE`: Ruff lint, Ruff format, Ruff C901 at threshold 10, mypy, architecture, Phase 1 benchmark, Git diff integrity, and evaluator-owned package and artifact verification.
 - `CONTAINED_BUILD`: candidate wheel build and other candidate build processes whose effects are contained and whose outputs are host-captured.
 - `COOPERATIVE_DYNAMIC`: `python.unittest.v1` and any dynamic runner that imports candidate code. Its fixed command, scope, nonzero and not-all-skipped test requirements, timeout, output bounds, cleanup, host-owned result, and exact bindings remain enforced; assertion truth is not independently attributable.
@@ -124,11 +130,10 @@ the evaluator-owned `sql_supportability` capability through
 trusted operator opts in only through the evaluator-owned adoption generator's
 typed profile argument. The generator writes `profile: python.sqlite.v1` into
 the configuration and binds the same value into the adoption manifest and
-verifier enrollment. Source discovery never silently changes the selected
-profile. The candidate pipeline derives the exact adapter tuple from the
-authenticated configuration; the external verifier derives it independently
-from the enrollment plus authenticated configuration and manifest. All values
-and orders must match. Candidate-provided commands, exclusions, profile
+native enforcement identity. Source discovery never silently changes the
+selected profile. The candidate pipeline derives the exact adapter tuple from
+the authenticated configuration and manifest. All values and orders must
+match. Candidate-provided commands, exclusions, profile
 substitution, capability omission, or order changes are invalid.
 
 Every adoption preflight and candidate run performs evaluator-owned profile
@@ -137,9 +142,9 @@ resolved connection/cursor/sink, or a packaged `.sql` resource referenced by
 that flow, requires `python.sqlite.v1`. The same evidence under
 `python.standard.v1` is `BLOCK_TECHNICAL`; discovery reports the required trusted
 opt-in but never changes the profile. Unclassified SQL-like sources also block
-rather than selecting an engine. The external verifier requires the bound
+rather than selecting an engine. The central evaluator requires the bound
 discovery receipt, recomputes the expected profile from it, and rejects any
-config, manifest, enrollment, capability-order, or discovery mismatch.
+config, manifest, capability-order, or discovery mismatch.
 
 For this contract, `python.standard.v1` byte compatibility means its adapter
 identifiers, assurance classes, order, execution-plan step definitions, profile
@@ -163,23 +168,23 @@ that comparison.
 - Extension loading stays disabled. Evaluator-owned `sqlite-policy.v1` uses a default-deny authorizer and statement classifier; permits schema execution only for `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE TRIGGER`, and `CREATE VIRTUAL TABLE ... USING fts5`; permits candidate PRAGMAs only for `foreign_keys`, `foreign_key_check`, and `quick_check`; and permits SQL functions only `bm25`, `coalesce`, `highlight`, `like`, `match`, and `snippet`. It rejects `ATTACH`, `DETACH`, `VACUUM`, file-backed databases, `load_extension`, writable-schema operations, every other PRAGMA/function/virtual-table module, and any filesystem escape.
 - `sqlite-policy.v1` requires SQLite `>=3.40.0,<4.0.0` with `ENABLE_FTS5`. It sets `SQLITE_LIMIT_LENGTH=2097152`, `SQLITE_LIMIT_SQL_LENGTH=1048576`, `SQLITE_LIMIT_COLUMN=2000`, `SQLITE_LIMIT_EXPR_DEPTH=1000`, `SQLITE_LIMIT_COMPOUND_SELECT=500`, `SQLITE_LIMIT_VDBE_OP=250000`, `SQLITE_LIMIT_FUNCTION_ARG=127`, `SQLITE_LIMIT_ATTACHED=0`, `SQLITE_LIMIT_LIKE_PATTERN_LENGTH=50000`, `SQLITE_LIMIT_VARIABLE_NUMBER=32766`, `SQLITE_LIMIT_TRIGGER_DEPTH=100`, and `SQLITE_LIMIT_WORKER_THREADS=0`. It initializes `trusted_schema=OFF`, `temp_store=MEMORY`, `journal_mode=MEMORY`, `foreign_keys=ON`, `recursive_triggers=OFF`, `max_page_count=16384`, and `cache_size=-8192`; caps each statement at 10,000,000 virtual-machine operations and two seconds; and retains the existing 120-second adapter plus process memory/output limits.
 - SQL canonicalization normalizes `CRLF`, `CR`, and `LF` before hashing.
-- Evidence records paths, line numbers, normalized hashes, discovered sinks, receiver provenance, exact SQLite version/compile-option digest, `sqlite-policy.v1` canonical SHA-256, preparation results, errors, timestamps, limits, and bounded counts. Candidate execution and the external verifier independently recompute and require the policy hash and certified toolchain SQLite identity.
+- Evidence records paths, line numbers, normalized hashes, discovered sinks, receiver provenance, exact SQLite version/compile-option digest, `sqlite-policy.v1` canonical SHA-256, preparation results, errors, timestamps, limits, and bounded counts. The exact central evaluator recomputes and requires the policy hash and certified toolchain SQLite identity.
 - `Gate implementation: PASS` means the exact adapter, schemas, bindings, and limit controls are registered and covered. `Repo SQL supportability: PASS` means every in-scope source, resource, sink, and dependency is resolved and validated. `SQL behavior proof: PASS` means evaluator-owned controls pass, schema statements build in statically proved order, remaining statements compile against that schema with bounded qmark or named dummy bindings, and required SQLite features exist. It does not claim application result rows, migration correctness, transaction semantics, or business behavior.
 - SQL evidence reports those three statuses separately. Missing, malformed, unsupported, contradictory, or unverifiable evidence produces `BLOCK_TECHNICAL`.
 - TWMN acceptance patterns are pinned to `markheck-solutions/twmn@47bf8823000ac98595ccb1013d3f8f6abdf90ebd` (tree `45b985ed6944cf9cc48ffe56e9954df5060b2a6a`). `src/twmn_corpus/database.py` has SHA-256 `bf8197920fe4821b7f8dc00e994db8f737c73863f40ecbaaa34069286a9cd66b`; candidate-owned `scripts/sql_gate.py` has SHA-256 `164e014d7f8c03d7393e765e0479524d149159bff281142879b4981640eb6363` and is behavior reference only, never executed or reused.
 - PostgreSQL, Snowflake, arbitrary candidate SQL commands, configurable escape hatches, and multi-engine abstraction remain out of scope.
 
-Practical Tamper-Resistant Governance v1 is the product release. Its typed configuration remains the separately versioned `schema_version: "2.0"` contract.
+Practical Tamper-Resistant Governance v1 is the product release. Native typed configuration uses the separately versioned `schema_version: "3.0"` contract; `schema_version: "2.0"` remains the legacy external-verifier format.
 
-### Untrusted execution and trusted verification
+### Untrusted execution and native enforcement
 
 - Candidate execution runs only in a `pull_request` workflow with `contents: read`, every unnecessary permission set to `none`, no secrets, no write token, exact action and evaluator pins, and no authoritative check identity.
 - Provisioning is separate from offline gate execution. Candidate processes run non-root with a read-only root filesystem, dropped capabilities, no privilege escalation, bounded CPU, memory, PIDs, output, step time, and total time, and only a disposable target copy writable.
 - Candidate code cannot access the Docker socket, evaluator checkout, toolchain source, or authoritative artifact directory.
 - A host wrapper outside the target checkout owns result paths and records exact identities, timing, timeout and termination, exit status, bounded stream counts and digests, truncation, cleanup, and artifact name and content digest.
-- The external verifier authenticates the adopter's `pull_request` workflow path and file hash against the certified Governance release. If the head changes that caller, its pinned wrapper, permissions, conditions, dependencies, or result-upload path, artifacts from that run are non-authoritative and cannot authorize the change.
-- No adopter-controlled `pull_request_target` workflow is trusted authority. Candidate execution produces evidence without secrets or write authority; the external verifier never checks out or executes candidate code.
-- The external verifier downloads artifacts as hostile data, safely inspects archive structure and bounds before extraction, validates schemas, recomputes digests and decisions, rejects identity mismatch or replay, reconciles the unchanged exact head and current protection, and alone emits the authoritative required context through its dedicated GitHub App.
+- The central workflow authenticates its GitHub-supplied workflow repository, path, and SHA against the certified Governance release, then binds the exact target repository, pull request, base, and head.
+- No adopter-controlled workflow is trusted authority. Candidate execution has no secrets or write authority, and the target cannot modify the organization-required central workflow.
+- Host-owned deterministic code validates schemas, recomputes digests and decisions, rejects identity mismatch or replay, and makes the stable final job fail for every blocking decision. Uploaded artifacts are diagnostic only.
 - Execution plans bind repository, pull request, base SHA and tree, head SHA and tree, evaluator and workflow identities, adapter version and assurance, configuration and standard hashes, toolchain and image identities, working directory, and bounded steps.
 
 ### GitHub enforcement
@@ -211,28 +216,14 @@ Required enforcement properties:
 
 Adopter protection is read-only until an explicit installation. Governance source settings may change only through the evidence-backed source-protection transaction defined above; unrelated protection weakening remains out of scope.
 
-### Protected four-PR release
+### Native SQLite release sequence
 
-1. **Source boundary:** land the source/adopter contract, independent source qualification, permission closure, standard-event validation, and structural source regressions.
-2. **Publication:** merge the complete evaluator, adapters, schemas, workflows, evidence contracts, verifier, and adoption tooling without changing live adopter pins or configuration. Use merge-commit strategy and record publication merge `M`; require `tree(M) == tree(C)` for the frozen qualified candidate `C`.
-3. **Exact-`M` qualification:** rerun complete qualification against the publication merge while the prior adopter pin remains active. A failure requires a replacement publication pull request, not weakened criteria.
-4. **Pin-only activation:** change only exact reusable workflow or action pins, `governance-ref` values, and literal pin fixtures. Verify every live adopter pin equals `M` after merge.
-5. **Config-only migration:** change only `.github/governance/supportability.yml` and exact migration fixtures from known v1 to typed v2. Require the external verifier context GREEN.
-6. Keep `main` frozen from publication-candidate freeze through activation and config migration. Preserve source protection and the adopter required-context identity throughout.
-
-### SQLite release sequence
-
-1. Merge this contract through the existing required `Governance Source Qualification`.
-2. Merge one publication pull request containing the adapter, schemas, verifier logic, adoption generator, documentation, and tests. Do not modify the frozen source qualifier modules, source workflow pair, dependency lock, or package contract.
-3. Use a merge commit, record publication merge `M`, and prove `tree(M) == tree(qualified candidate)`.
-4. Run exact-`M` qualification while the verifier remains pinned to `c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86`.
-5. Merge a pin-only `governance-verifier` pull request changing only Governance SHA literals to `M`.
-6. Migrate the existing disposable runtime repository to `python.sqlite.v1`; do not create another permanent repository.
-7. Prove clean, defective, replay, hostile-artifact, stale-head, spoofed-context, and AI-unavailable canaries. Defective pull requests close unmerged.
-8. Publish an immutable release only after every canary passes; record `c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86` as rollback.
-9. Generate TWMN's bundle at the certified SHA from a separate clean worktree. Preserve its existing dirty checkout and unrelated pull requests.
-10. Enroll TWMN in the verifier App, replace obsolete Actions contexts with `Governance / Authoritative Decision` through before-and-after ruleset snapshots plus a tested restore path, and merge the adoption pull request.
-11. Run a harmless TWMN canary and report the complete live GitHub governance status split.
+1. Merge one native publication pull request through `Governance Source Qualification`, record publication merge `G`, and prove `tree(G) == tree(qualified candidate)` with frozen source-authority files unchanged.
+2. Transfer and migrate the existing disposable runtime repository through one guarded protection transaction. Require the exact central workflow at `G` before removing only its obsolete legacy Governance App context.
+3. Prove exactly the disposable clean, deterministic-defect, local-spoof, and latest-head canaries. Defective pull requests close unmerged.
+4. Transfer TWMN without modifying its existing dirty checkout. Generate its native `python.sqlite.v1` bundle from a separate clean worktree and perform the same guarded protection transition.
+5. Prove one harmless TWMN canary and one bounded SQLite-defect canary.
+6. Publish one immutable native SQLite release at `G`, verify both adopters remain pinned to `G`, then retire the scheduled legacy verifier without deleting its history.
 
 The publication candidate must pass these exact local source gates:
 
@@ -273,7 +264,7 @@ python -m governance_eval.cli verify --repeat 3 --artifacts-dir artifacts/phase1
 12. Replace manual protected-path filename lists with structural protection for all evaluator Python, schemas, workflows, actions, dependency locks, package metadata, architecture and supportability configuration, adapter command logic, evidence validation, and final decisions.
 13. Generate byte-stable, read-only adoption bundles and proofs without applying changes, opening pull requests, mutating protection, enumerating repositories, or modifying targets.
 14. Prove the framework through clean, defective, replay, stale-review, protected-context-spoof, hostile-artifact, and AI-unavailable canaries.
-15. Implement `python.sqlite.v1` without changing `python.standard.v1`, and bind its SQL evidence through typed execution plans, results, adoption manifests, and external-verifier validation.
+15. Implement `python.sqlite.v1` without changing `python.standard.v1`, and bind its SQL evidence through typed execution plans, results, adoption manifests, and exact central-evaluator validation.
 16. Fail adoption preflight when required SQLite source or resource content would be absent from the committed pull-request head.
 
 ## Required controls
@@ -340,20 +331,20 @@ Completion is `FAIL` unless all are true:
 - No evaluated target repository was modified.
 - Governance configuration validates and uses supported typed adapters only.
 - `python.unittest.v1` is documented and evidenced as `COOPERATIVE_DYNAMIC`; no completion document claims otherwise.
-- The trusted verifier never executes or imports candidate code or executes artifact contents.
+- Native host validation never imports candidate code outside the declared contained execution plane. The legacy verifier never executes or imports candidate code or artifact contents.
 - Untrusted execution has no secrets or write token; authoritative artifacts are host-owned and exact-identity bound.
 - Replay, mutation, malformed archives, scope narrowing, threshold weakening, and required-check spoofing deterministically block.
 - Protected baseline and candidate artifacts are independently schema-valid and bound to the exact pull-request head.
 - Delivery receipt validates both evidence chains and remote GitHub state.
 - Governance source requires only independent source qualification; Governance application contexts may run diagnostically but are not required on Governance itself.
-- Each adopter requires one stable external-verifier context bound to the dedicated verifier GitHub App ID; a candidate-created same-name check cannot satisfy it.
+- Each native adopter requires the exact central workflow at `G` through the organization ruleset; a candidate-created same-name workflow or check cannot satisfy it.
 - Clean canary merges through the protected path.
 - Defective canary remains RED and closes unmerged.
 - Stale-review canary proves stale AI evidence cannot block or authorize the current head; a current exact-head received P0-P2 finding remains RED until resolved.
 - Protected-context-spoof canary cannot bypass the real protected result.
 - Codex request transport is attempted automatically and cannot skip deterministic evaluation; exact-head received evidence is classified; missing or unavailable evidence records `AI_REVIEW_UNAVAILABLE`; no PAT or Copilot evidence is required.
-- A deterministic adoption command generates repo config and a caller pinned to the exact Governance SHA, validates config hash and required-context mapping, documents protection setup, and proves disposable clean and defective adoption canaries without modifying any target repository.
-- The active evaluator and adoption pin equal publication merge `M`; live typed config is v2; arbitrary v1 command execution is unreachable; `main` contains no unactivated evaluator backlog.
+- A deterministic adoption command generates repo config and native metadata pinned to the exact Governance SHA, validates config and standard hashes plus required-workflow identity, and does not modify a target repository.
+- The active evaluator, required workflow, and adoption pin equal publication merge `G`; live typed native config is v3; arbitrary command execution is unreachable; `main` contains no unactivated evaluator backlog.
 - Protection and rulesets equal the verified intended delta from the saved before snapshot; the obsolete self-referential source contexts are not restored.
 - A schema-valid `governance_completion_receipt.v1` binds every release pull request, SHA, run, artifact, digest, command, exit, canary, live-protection proof, and remaining unknown.
 - Fresh adversarial review reports zero unresolved P0-P2 findings.
@@ -361,6 +352,6 @@ Completion is `FAIL` unless all are true:
 - `python.standard.v1` named deterministic surfaces match rollback-SHA golden bytes and digests, and both pipelines independently select and validate `python.sqlite.v1` plus its exact capability order for SQLite adopters.
 - SQLite positive and negative controls pass, including TWMN-style static SQL, resource discovery, newline-normalized hashing, unsupported dynamic SQL, evidence mutation, and profile/config substitution.
 - SQLite evidence reports `Gate implementation: PASS`, `Repo SQL supportability: PASS`, and `SQL behavior proof: PASS` separately.
-- Exact publication-merge qualification, verifier activation, disposable canaries, immutable release, and live TWMN config, caller, ruleset, required-check, artifact, receipt, and harmless-canary proof all pass.
+- Exact publication-merge qualification, native organization-ruleset activation, disposable canaries, immutable release, legacy-verifier retirement, and live TWMN config, required-workflow, ruleset, job, receipt, and harmless-canary proof all pass.
 
 Do not weaken any criterion to finish. Report `BLOCK_TECHNICAL` when required proof is unavailable.

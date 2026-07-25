@@ -10,11 +10,17 @@ from typing import Any, Mapping, Sequence
 from governance_eval.adoption import (
     CONFIG_PATH,
     MANIFEST_PATH,
+    NATIVE_AUTHORITY_MODE,
+    NATIVE_GOVERNANCE_REPOSITORY,
+    NATIVE_GOVERNANCE_REPOSITORY_ID,
+    NATIVE_WORKFLOW_PATH,
     STANDARD_PATH,
     WORKFLOW_PATH,
     AdoptionError,
     validate_adoption_config,
     validate_adoption_manifest,
+    validate_native_adoption_config,
+    validate_native_adoption_manifest,
 )
 from governance_eval.candidate_bundle import (
     build_candidate_bundle,
@@ -34,6 +40,7 @@ from governance_eval.sqlite_supportability import (
 
 GOVERNANCE_REPOSITORY = "markheck-solutions/governance"
 GOVERNANCE_REPOSITORY_ID = 1280677092
+LEGACY_AUTHORITY_MODE = "legacy.external_verifier.v1"
 
 
 class CandidatePipelineError(ValueError):
@@ -55,18 +62,42 @@ def run_candidate_pipeline(
     run_attempt: int,
     toolchain_root: Path,
     output_dir: Path,
+    authority_mode: str = LEGACY_AUTHORITY_MODE,
+    workflow_repository: str | None = None,
 ) -> dict[str, Any]:
+    native = authority_mode == NATIVE_AUTHORITY_MODE
+    _validate_authority_inputs(
+        authority_mode=authority_mode,
+        workflow_repository=workflow_repository,
+        workflow_path=workflow_path,
+        workflow_ref=workflow_ref,
+        workflow_commit_sha=workflow_commit_sha,
+        evaluator_sha=evaluator_sha,
+    )
     target = target_root.resolve()
     evaluator = evaluator_root.resolve()
     event = _load_event(event_path)
     repository = _mapping(event.get("repository"), "repository")
     pull_request = _mapping(event.get("pull_request"), "pull request")
     docker = _executable("docker")
-    workflow_file = _inside(target, target / workflow_path, "workflow")
+    workflow_root = evaluator if native else target
+    workflow_file = _inside(workflow_root, workflow_root / workflow_path, "workflow")
     config_file = _inside(target, config_path, "configuration")
     standard_file = _inside(target, standard_path, "standard")
     manifest_file = _inside(target, target / MANIFEST_PATH, "adoption manifest")
-    profile = _validate_configuration(config_file, standard_file, evaluator_sha)
+    profile = _validate_configuration(
+        config_file, standard_file, evaluator_sha, authority_mode=authority_mode
+    )
+    if native:
+        evaluator_standard = _inside(
+            evaluator,
+            evaluator / "docs/reference/supportability-standard.md",
+            "evaluator standard",
+        )
+        if sha256_file(standard_file) != sha256_file(evaluator_standard):
+            raise CandidatePipelineError(
+                "native adoption standard differs from exact Governance source"
+            )
     discovery = discover_repository_profile(target)
     try:
         validate_profile_discovery(discovery, selected_profile=profile)
@@ -82,34 +113,47 @@ def run_candidate_pipeline(
         or not isinstance(repository_name, str)
     ):
         raise CandidatePipelineError("repository identity is invalid")
-    verifier = _mapping(
-        _load_json(config_file, "adoption configuration").get("verifier"),
-        "verifier configuration",
-    )
-    app_id = verifier.get("app_id")
-    assert isinstance(app_id, int) and not isinstance(app_id, bool)
     try:
-        validate_adoption_manifest(
-            adoption_manifest,
-            repository=repository_name,
-            repository_id=repository_id,
-            governance_sha=evaluator_sha,
-            verifier_app_id=app_id,
-            profile=profile,
-        )
+        if native:
+            validate_native_adoption_manifest(
+                adoption_manifest,
+                repository=repository_name,
+                repository_id=repository_id,
+                governance_sha=evaluator_sha,
+                profile=profile,
+            )
+        else:
+            verifier = _mapping(
+                _load_json(config_file, "adoption configuration").get("verifier"),
+                "verifier configuration",
+            )
+            app_id = verifier.get("app_id")
+            assert isinstance(app_id, int) and not isinstance(app_id, bool)
+            validate_adoption_manifest(
+                adoption_manifest,
+                repository=repository_name,
+                repository_id=repository_id,
+                governance_sha=evaluator_sha,
+                verifier_app_id=app_id,
+                profile=profile,
+            )
     except AdoptionError as exc:
         raise CandidatePipelineError(str(exc)) from exc
-    _validate_manifest_files(adoption_manifest, target)
+    _validate_manifest_files(adoption_manifest, target, native=native)
+    evaluator_repository = {
+        "id": (NATIVE_GOVERNANCE_REPOSITORY_ID if native else GOVERNANCE_REPOSITORY_ID),
+        "full_name": (
+            NATIVE_GOVERNANCE_REPOSITORY if native else GOVERNANCE_REPOSITORY
+        ),
+    }
     receipt = bind_checkout(
         target_root=target,
         evaluator_root=evaluator,
         event=event,
         pull_request=pull_request,
         repository=repository,
-        evaluator_repository={
-            "id": GOVERNANCE_REPOSITORY_ID,
-            "full_name": GOVERNANCE_REPOSITORY,
-        },
+        evaluator_repository=evaluator_repository,
+        workflow_repository=evaluator_repository if native else None,
         workflow={
             "workflow_ref": workflow_ref,
             "workflow_sha": workflow_commit_sha,
@@ -151,6 +195,7 @@ def run_candidate_pipeline(
         profile=profile,
         profile_discovery=discovery,
         adoption_manifest_sha256=sha256_file(manifest_file),
+        central_workflow=native,
     )
     write_candidate_bundle(output_dir, payloads, target_root=target)
     return json.loads(payloads["candidate-bundle.json"])
@@ -169,17 +214,24 @@ def _load_event(path: Path) -> Mapping[str, Any]:
 
 
 def _validate_configuration(
-    config_path: Path, standard_path: Path, evaluator_sha: str
+    config_path: Path,
+    standard_path: Path,
+    evaluator_sha: str,
+    *,
+    authority_mode: str = LEGACY_AUTHORITY_MODE,
 ) -> str:
     config = _load_json(config_path, "adoption configuration")
-    verifier = _mapping(config.get("verifier"), "verifier configuration")
-    app_id = verifier.get("app_id")
-    if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id < 1:
-        raise CandidatePipelineError("verifier App id must be positive")
     try:
-        validate_adoption_config(
-            config, governance_sha=evaluator_sha, verifier_app_id=app_id
-        )
+        if authority_mode == NATIVE_AUTHORITY_MODE:
+            validate_native_adoption_config(config, governance_sha=evaluator_sha)
+        else:
+            verifier = _mapping(config.get("verifier"), "verifier configuration")
+            app_id = verifier.get("app_id")
+            if not isinstance(app_id, int) or isinstance(app_id, bool) or app_id < 1:
+                raise CandidatePipelineError("verifier App id must be positive")
+            validate_adoption_config(
+                config, governance_sha=evaluator_sha, verifier_app_id=app_id
+            )
     except AdoptionError as exc:
         raise CandidatePipelineError(str(exc)) from exc
     standard = _mapping(config.get("standard"), "standard configuration")
@@ -191,13 +243,16 @@ def _validate_configuration(
     return profile
 
 
-def _validate_manifest_files(manifest: Mapping[str, Any], target: Path) -> None:
+def _validate_manifest_files(
+    manifest: Mapping[str, Any], target: Path, *, native: bool = False
+) -> None:
     files = _mapping(manifest.get("files"), "adoption manifest files")
     expected = {
         CONFIG_PATH: target / CONFIG_PATH,
         STANDARD_PATH: target / STANDARD_PATH,
-        WORKFLOW_PATH: target / WORKFLOW_PATH,
     }
+    if not native:
+        expected[WORKFLOW_PATH] = target / WORKFLOW_PATH
     if set(files) != set(expected):
         raise CandidatePipelineError("adoption manifest file set is invalid")
     for name, path in expected.items():
@@ -208,6 +263,33 @@ def _validate_manifest_files(manifest: Mapping[str, Any], target: Path) -> None:
             "sha256": sha256_file(file_path),
         }:
             raise CandidatePipelineError("adoption manifest file binding mismatch")
+
+
+def _validate_authority_inputs(
+    *,
+    authority_mode: str,
+    workflow_repository: str | None,
+    workflow_path: str,
+    workflow_ref: str,
+    workflow_commit_sha: str,
+    evaluator_sha: str,
+) -> None:
+    if authority_mode == LEGACY_AUTHORITY_MODE:
+        if workflow_repository is not None:
+            raise CandidatePipelineError(
+                "legacy candidate workflow repository must be target-owned"
+            )
+        return
+    if authority_mode != NATIVE_AUTHORITY_MODE:
+        raise CandidatePipelineError("workflow authority mode is unsupported")
+    if (
+        workflow_repository != NATIVE_GOVERNANCE_REPOSITORY
+        or workflow_path != NATIVE_WORKFLOW_PATH
+        or workflow_commit_sha != evaluator_sha
+        or workflow_ref
+        != f"{workflow_repository}/{workflow_path}@{workflow_commit_sha}"
+    ):
+        raise CandidatePipelineError("native required workflow identity is invalid")
 
 
 def _load_json(path: Path, label: str) -> Mapping[str, Any]:
@@ -286,6 +368,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-attempt", required=True, type=int)
     parser.add_argument("--toolchain-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--authority-mode",
+        choices=(LEGACY_AUTHORITY_MODE, NATIVE_AUTHORITY_MODE),
+        default=LEGACY_AUTHORITY_MODE,
+    )
+    parser.add_argument("--workflow-repository")
     return parser
 
 
@@ -293,6 +381,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     manifest = run_candidate_pipeline(**vars(arguments))
     print(json.dumps(manifest["decision"], sort_keys=True))
+    if (
+        arguments.authority_mode == NATIVE_AUTHORITY_MODE
+        and manifest["decision"]["status"] != "PASS"
+    ):
+        return 1
     return 0
 
 

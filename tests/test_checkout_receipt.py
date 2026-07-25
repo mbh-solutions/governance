@@ -276,6 +276,27 @@ class CheckoutReceiptTests(unittest.TestCase):
             "markheck-solutions/governance",
         )
 
+        central = self._bind(
+            repository=target_repository,
+            event=target_event,
+            pull_request=target_pr,
+            evaluator_repository=self.repository,
+            workflow_repository=self.repository,
+            workflow={
+                **self.workflow,
+                "workflow_ref": (
+                    "markheck-solutions/governance/.github/workflows/"
+                    f"governance-required.yml@{self.evaluator_sha}"
+                ),
+                "evaluator_sha": self.evaluator_sha,
+            },
+        )
+        self.assertEqual(
+            central.workflow["workflow_ref"],
+            "markheck-solutions/governance/.github/workflows/"
+            f"governance-required.yml@{self.evaluator_sha}",
+        )
+
     def test_rejects_non_github_hostname_containing_github_text(self) -> None:
         _git(
             self.target,

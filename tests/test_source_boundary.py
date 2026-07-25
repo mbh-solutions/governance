@@ -784,18 +784,17 @@ class SourceBoundaryTests(unittest.TestCase):
         task = (self.root / "TASK.md").read_text(encoding="utf-8")
         readme = (self.root / "README.md").read_text(encoding="utf-8")
         adr = (
-            self.root / "docs" / "adr" / "0002-source-adopter-authority.md"
+            self.root / "docs" / "adr" / "0004-native-organization-required-workflow.md"
         ).read_text(encoding="utf-8")
 
-        for document in (agents, task, readme, adr):
+        for document in (task, readme, adr):
             self.assertIn("Governance source", document)
             self.assertIn("external verifier", document.lower())
-            self.assertIn("pull-request-only", document)
+            self.assertIn("legacy", document.lower())
         self.assertIn("diagnostic, never required", agents)
-        self.assertIn("dedicated verifier GitHub App", task)
-        self.assertIn("exact certified Governance SHA", readme)
+        self.assertIn("organization required workflow", task)
+        self.assertIn("stable final job", readme)
         self.assertIn("supersedes", adr.lower())
-        self.assertIn("Merge queue is optional", task)
 
     def test_active_contract_does_not_restore_self_referential_requirements(
         self,
