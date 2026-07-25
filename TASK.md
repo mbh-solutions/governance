@@ -14,9 +14,11 @@ Governance is a target-neutral evaluator and GitHub enforcement framework for so
 - release through protected pull requests without making Governance application checks authoritative over Governance source edits;
 - prove clean, defective, and stale-evidence canaries before any target rollout.
 
-Governance v1 supports the Python 3.12 ecosystem only.
+Governance v1 supports the Python 3.12 ecosystem only. `python.standard.v1`
+remains the unchanged profile for non-SQL adopters. `python.sqlite.v1` is the
+only opt-in database profile in this release.
 
-Spaghetti remains one registered historical target pack and benchmark source. It is not the framework identity, default target, or special case in the core evaluator. TWMN and all other application repositories remain out of scope until the deployable product and disposable adopter canaries are proven.
+Spaghetti remains one registered historical target pack and benchmark source. It is not the framework identity, default target, or special case in the core evaluator. TWMN remains out of scope until the SQLite publication is qualified and the existing disposable adopter passes every required canary; TWMN is then the first real SQLite adopter.
 
 ## Authority and evidence
 
@@ -116,6 +118,57 @@ Repository-specific cases, fixtures, typed capability declarations, bounded adap
 - The framework does not claim universal language support. A repository is governable only when all required capabilities have supported adapters.
 - Candidate configuration cannot choose, replace, or modify the protected baseline judge or delivery-receipt verifier.
 
+`python.sqlite.v1` extends, and does not alter, `python.standard.v1`. It appends
+the evaluator-owned `sql_supportability` capability through
+`python.sqlite-supportability.v1`, classified `EVALUATOR_AUTHORITATIVE`. A
+trusted operator opts in only through the evaluator-owned adoption generator's
+typed profile argument. The generator writes `profile: python.sqlite.v1` into
+the configuration and binds the same value into the adoption manifest and
+verifier enrollment. Source discovery never silently changes the selected
+profile. The candidate pipeline derives the exact adapter tuple from the
+authenticated configuration; the external verifier derives it independently
+from the enrollment plus authenticated configuration and manifest. All values
+and orders must match. Candidate-provided commands, exclusions, profile
+substitution, capability omission, or order changes are invalid.
+
+Every adoption preflight and candidate run performs evaluator-owned profile
+discovery before profile execution. A packaged Python `sqlite3` import plus a
+resolved connection/cursor/sink, or a packaged `.sql` resource referenced by
+that flow, requires `python.sqlite.v1`. The same evidence under
+`python.standard.v1` is `BLOCK_TECHNICAL`; discovery reports the required trusted
+opt-in but never changes the profile. Unclassified SQL-like sources also block
+rather than selecting an engine. The external verifier requires the bound
+discovery receipt, recomputes the expected profile from it, and rejects any
+config, manifest, enrollment, capability-order, or discovery mismatch.
+
+For this contract, `python.standard.v1` byte compatibility means its adapter
+identifiers, assurance classes, order, execution-plan step definitions, profile
+marker framing, canonical profile payload serialization, and deterministic
+decision remain byte-identical for identical non-SQL inputs. Publication tests
+must compare those surfaces with evaluator-owned golden bytes and SHA-256
+digests generated from rollback SHA
+`c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86`. Release identity, timestamps,
+standard-document hash, and artifact identity bindings are intentionally outside
+that comparison.
+
+### Bounded SQLite contract
+
+- Only Python standard-library `ast`, `sqlite3`, hashing, and existing safe package-audit helpers may implement SQLite governance.
+- The evaluator scans the host-validated packaged Python and resource surface, not tests, environments, caches, or arbitrary ignored directories.
+- Adoption preflight also inspects tracked files, untracked nonignored files, and ignored SQL resources referenced by production code. Required runtime SQL absent from the committed pull-request head blocks.
+- Static extraction supports string literals, constant concatenation, static dictionaries, and statically selected dictionary entries. F-strings, runtime-built SQL, missing constants, runtime-loaded external SQL, unsupported sinks, unresolved packaged resources, and any other unresolved SQL block.
+- Sink discovery proves receiver provenance across the packaged Python graph through `sqlite3` import aliases, `connect` calls, connection/cursor annotations, cursor derivation, and statically resolved function returns. An unresolved `execute`, `executemany`, or `executescript` receiver participating in SQLite or SQL flow blocks. Unresolved `getattr`, method aliases, wrapper forwarding, and dynamic dispatch block; unrelated methods may be ignored only when their non-SQL type is proved.
+- Before parsing, evaluator-owned hard maxima are 10,000 files, 2 MiB per file, 32 MiB total source bytes, 1,000,000 Python AST nodes, 10,000 sinks, 10,000 SQL statements, and 1 MiB per normalized statement. Each boundary has passing-at-limit and blocking-over-limit controls.
+- The adapter validates `execute`, `executemany`, and `executescript`. It builds schema statements only in statically proved sink and statement order in an isolated in-memory SQLite database and prepares remaining statements with bounded qmark or named dummy bindings without importing candidate code. Unproved cross-function/resource ordering blocks; the evaluator never reorders SQL to make it pass.
+- Extension loading stays disabled. Evaluator-owned `sqlite-policy.v1` uses a default-deny authorizer and statement classifier; permits schema execution only for `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW`, `CREATE TRIGGER`, and `CREATE VIRTUAL TABLE ... USING fts5`; permits candidate PRAGMAs only for `foreign_keys`, `foreign_key_check`, and `quick_check`; and permits SQL functions only `bm25`, `highlight`, `like`, `match`, and `snippet`. It rejects `ATTACH`, `DETACH`, `VACUUM`, file-backed databases, `load_extension`, writable-schema operations, every other PRAGMA/function/virtual-table module, and any filesystem escape.
+- `sqlite-policy.v1` requires SQLite `>=3.40.0,<4.0.0` with `ENABLE_FTS5`. It sets `SQLITE_LIMIT_LENGTH=2097152`, `SQLITE_LIMIT_SQL_LENGTH=1048576`, `SQLITE_LIMIT_COLUMN=2000`, `SQLITE_LIMIT_EXPR_DEPTH=1000`, `SQLITE_LIMIT_COMPOUND_SELECT=500`, `SQLITE_LIMIT_VDBE_OP=250000`, `SQLITE_LIMIT_FUNCTION_ARG=127`, `SQLITE_LIMIT_ATTACHED=0`, `SQLITE_LIMIT_LIKE_PATTERN_LENGTH=50000`, `SQLITE_LIMIT_VARIABLE_NUMBER=32766`, `SQLITE_LIMIT_TRIGGER_DEPTH=100`, and `SQLITE_LIMIT_WORKER_THREADS=0`. It initializes `trusted_schema=OFF`, `temp_store=MEMORY`, `journal_mode=MEMORY`, `foreign_keys=ON`, `recursive_triggers=OFF`, `max_page_count=16384`, and `cache_size=-8192`; caps each statement at 10,000,000 virtual-machine operations and two seconds; and retains the existing 120-second adapter plus process memory/output limits.
+- SQL canonicalization normalizes `CRLF`, `CR`, and `LF` before hashing.
+- Evidence records paths, line numbers, normalized hashes, discovered sinks, receiver provenance, exact SQLite version/compile-option digest, `sqlite-policy.v1` canonical SHA-256, preparation results, errors, timestamps, limits, and bounded counts. Candidate execution and the external verifier independently recompute and require the policy hash and certified toolchain SQLite identity.
+- `Gate implementation: PASS` means the exact adapter, schemas, bindings, and limit controls are registered and covered. `Repo SQL supportability: PASS` means every in-scope source, resource, sink, and dependency is resolved and validated. `SQL behavior proof: PASS` means evaluator-owned controls pass, schema statements build in statically proved order, remaining statements compile against that schema with bounded qmark or named dummy bindings, and required SQLite features exist. It does not claim application result rows, migration correctness, transaction semantics, or business behavior.
+- SQL evidence reports those three statuses separately. Missing, malformed, unsupported, contradictory, or unverifiable evidence produces `BLOCK_TECHNICAL`.
+- TWMN acceptance patterns are pinned to `markheck-solutions/twmn@47bf8823000ac98595ccb1013d3f8f6abdf90ebd` (tree `45b985ed6944cf9cc48ffe56e9954df5060b2a6a`). `src/twmn_corpus/database.py` has SHA-256 `bf8197920fe4821b7f8dc00e994db8f737c73863f40ecbaaa34069286a9cd66b`; candidate-owned `scripts/sql_gate.py` has SHA-256 `164e014d7f8c03d7393e765e0479524d149159bff281142879b4981640eb6363` and is behavior reference only, never executed or reused.
+- PostgreSQL, Snowflake, arbitrary candidate SQL commands, configurable escape hatches, and multi-engine abstraction remain out of scope.
+
 Practical Tamper-Resistant Governance v1 is the product release. Its typed configuration remains the separately versioned `schema_version: "2.0"` contract.
 
 ### Untrusted execution and trusted verification
@@ -167,6 +220,32 @@ Adopter protection is read-only until an explicit installation. Governance sourc
 5. **Config-only migration:** change only `.github/governance/supportability.yml` and exact migration fixtures from known v1 to typed v2. Require the external verifier context GREEN.
 6. Keep `main` frozen from publication-candidate freeze through activation and config migration. Preserve source protection and the adopter required-context identity throughout.
 
+### SQLite release sequence
+
+1. Merge this contract through the existing required `Governance Source Qualification`.
+2. Merge one publication pull request containing the adapter, schemas, verifier logic, adoption generator, documentation, and tests. Do not modify the frozen source qualifier modules, source workflow pair, dependency lock, or package contract.
+3. Use a merge commit, record publication merge `M`, and prove `tree(M) == tree(qualified candidate)`.
+4. Run exact-`M` qualification while the verifier remains pinned to `c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86`.
+5. Merge a pin-only `governance-verifier` pull request changing only Governance SHA literals to `M`.
+6. Migrate the existing disposable runtime repository to `python.sqlite.v1`; do not create another permanent repository.
+7. Prove clean, defective, replay, hostile-artifact, stale-head, spoofed-context, and AI-unavailable canaries. Defective pull requests close unmerged.
+8. Publish an immutable release only after every canary passes; record `c07b2ecf831fa2e3c68481a782a7e9e50d9dbc86` as rollback.
+9. Generate TWMN's bundle at the certified SHA from a separate clean worktree. Preserve its existing dirty checkout and unrelated pull requests.
+10. Enroll TWMN in the verifier App, replace obsolete Actions contexts with `Governance / Authoritative Decision` through before-and-after ruleset snapshots plus a tested restore path, and merge the adoption pull request.
+11. Run a harmless TWMN canary and report the complete live GitHub governance status split.
+
+The publication candidate must pass these exact local source gates:
+
+```text
+python -I -m ruff check --isolated --target-version py312 .
+python -I -m ruff format --check --isolated --target-version py312 .
+python -I -m ruff check --isolated --select C901 --config "lint.mccabe.max-complexity=10" --target-version py312 governance_eval
+python -I -m mypy governance_eval
+python -I -m unittest discover -s tests -p "test_*.py"
+python -I -m pip wheel --no-deps --no-build-isolation --wheel-dir dist .
+python -m governance_eval.cli verify --repeat 3 --artifacts-dir artifacts/phase1
+```
+
 ### Execution service levels
 
 - Every subprocess uses an enforced hard timeout and records command, start/end time, timeout state, and exit code in schema-valid evidence.
@@ -194,6 +273,8 @@ Adopter protection is read-only until an explicit installation. Governance sourc
 12. Replace manual protected-path filename lists with structural protection for all evaluator Python, schemas, workflows, actions, dependency locks, package metadata, architecture and supportability configuration, adapter command logic, evidence validation, and final decisions.
 13. Generate byte-stable, read-only adoption bundles and proofs without applying changes, opening pull requests, mutating protection, enumerating repositories, or modifying targets.
 14. Prove the framework through clean, defective, replay, stale-review, protected-context-spoof, hostile-artifact, and AI-unavailable canaries.
+15. Implement `python.sqlite.v1` without changing `python.standard.v1`, and bind its SQL evidence through typed execution plans, results, adoption manifests, and external-verifier validation.
+16. Fail adoption preflight when required SQLite source or resource content would be absent from the committed pull-request head.
 
 ## Required controls
 
@@ -217,6 +298,8 @@ Positive, negative, and evasion controls must cover at least:
 - candidate modification of the `pull_request` caller or upload wrapper cannot make that run's artifact authoritative, including during publication or pin activation;
 - protected-context spoof attempt from candidate-controlled workflow;
 - replay or mutation of a previously authorized protected-workflow update.
+- SQLite literals, constant concatenation, static dictionary selection, parameterized queries, schema creation, PRAGMA, FTS, packaged `.sql` resources, and LF/CRLF canonical-hash equality;
+- malformed SQL, missing constants, f-strings, dynamic identifiers, runtime file loading, absent resources, schema-order failure, SQLite evidence mutation, adapter omission, profile substitution, profile/config hash mismatch, and archive abuse.
 
 ## Required workflow
 
@@ -239,7 +322,7 @@ Before each implementation slice:
 - Production application refactoring.
 - Global governance-skill modification.
 - Unscoped branch-protection, ruleset, required-context, default-branch, permission, or administrative-bypass mutation outside the owner-authorized Governance source transaction.
-- Node, PowerShell, SQL, or additional language adapters in Governance v1.
+- Node, PowerShell, PostgreSQL, Snowflake, arbitrary SQL-command, multi-engine, or additional language/database adapters in Governance v1.
 - A custom hosted execution service, black-box assertion RPC framework, or `EXTERNAL_ORACLE` implementation in Governance v1.
 - Universal hostile-code truth proof for in-process dynamic assertions.
 - Claiming support for an adapter or ecosystem without executable positive, negative, and evasion controls.
@@ -275,5 +358,9 @@ Completion is `FAIL` unless all are true:
 - A schema-valid `governance_completion_receipt.v1` binds every release pull request, SHA, run, artifact, digest, command, exit, canary, live-protection proof, and remaining unknown.
 - Fresh adversarial review reports zero unresolved P0-P2 findings.
 - Final report lists exact commands, exit codes, artifacts, hashes, commit SHAs, live GitHub proof, and unresolved unknowns.
+- `python.standard.v1` named deterministic surfaces match rollback-SHA golden bytes and digests, and both pipelines independently select and validate `python.sqlite.v1` plus its exact capability order for SQLite adopters.
+- SQLite positive and negative controls pass, including TWMN-style static SQL, resource discovery, newline-normalized hashing, unsupported dynamic SQL, evidence mutation, and profile/config substitution.
+- SQLite evidence reports `Gate implementation: PASS`, `Repo SQL supportability: PASS`, and `SQL behavior proof: PASS` separately.
+- Exact publication-merge qualification, verifier activation, disposable canaries, immutable release, and live TWMN config, caller, ruleset, required-check, artifact, receipt, and harmless-canary proof all pass.
 
 Do not weaken any criterion to finish. Report `BLOCK_TECHNICAL` when required proof is unavailable.
